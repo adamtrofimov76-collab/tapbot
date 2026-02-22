@@ -68,16 +68,15 @@ async def tap(message: types.Message):
 
         restore_energy(user)
 
-if user.energy >= 1:
-    user.energy -= 1
-    user.balance += user.tap_power
-    user.xp += 1
-    await session.commit()
-    await message.answer(f"+{user.tap_power} очков 💰")
-else:
-    await session.commit()  # ← ВОТ ЭТУ СТРОКУ ДОБАВИТЬ
-    await message.answer("❌ Нет энергии!")
-
+        if user.energy >= 1:
+            user.energy -= 1
+            user.balance += user.tap_power
+            user.xp += 1
+            await session.commit()
+            await message.answer(f"+{user.tap_power} очков 💰")
+        else:
+            await session.commit()
+            await message.answer("❌ Нет энергии!")
 # ---------- ПРОФИЛЬ ----------
 @dp.message(lambda m: m.text == "📊 Профиль")
 async def profile(message: types.Message):

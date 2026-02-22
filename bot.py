@@ -1,164 +1,198 @@
-import asyncio
-import datetime
 import os
+import asyncio
+from datetime import datetime
 
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from aiogram.filters import Command
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.filters import CommandStart
 
-from sqlalchemy import select
-from database import SessionLocal, engine
-from models import Base, User
+from sqlalchemy import Column, BigInteger, Integer, DateTime, select
+from sqlalchemy.orm import declarative_base
+from sqlalchemy.ext.asyncio import (
+    create_async_engine,
+    AsyncSession
+)
+from sqlalchemy.orm import sessionmaker
 
-TOKEN = os.getenv("BOT_TOKEN")
 
-bot = Bot(token=TOKEN)
+# ========================
+# НАСТРОЙКИ
+# ========================
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace(
+        "postgresql://",
+        "postgresql+asyncpg://"
+    )
+
+
+# ========================
+# БАЗА ДАННЫХ
+# ========================
+
+Base = declarative_base()
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(BigInteger, primary_key=True)
+
+    balance = Column(Integer, default=0)
+
+    tap_power = Column(Integer, default=1)
+
+    auto_click = Column(Integer, default=0)
+
+    last_update = Column(DateTime, default=datetime.utcnow)
+
+
+engine = create_async_engine(DATABASE_URL, echo=False)
+
+SessionLocal = sessionmaker(
+    engine,
+    class_=AsyncSession,
+    expire_on_commit=False
+)
+
+
+async def init_db():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+
+# ========================
+# ЛОГИКА
+# ========================
+
+async def get_user(session, user_id: int):
+    result = await session.execute(
+        select(User).where(User.id == user_id)
+    )
+    user = result.scalar_one_or_none()
+
+    if not user:
+        user = User(id=user_id)
+        session.add(user)
+        await session.commit()
+
+    return user
+
+
+async def update_balance(user: User):
+    now = datetime.utcnow()
+    seconds_passed = (now - user.last_update).total_seconds()
+
+    earned = int(seconds_passed * user.auto_click)
+
+    user.balance += earned
+    user.last_update = now
+
+
+# ========================
+# БОТ
+# ========================
+
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# ---------- КНОПКИ ----------
-keyboard = ReplyKeyboardMarkup(
+
+# Клавиатура
+main_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="👆 Тап")],
-        [KeyboardButton(text="⚡ Улучшить тап"),
-         KeyboardButton(text="🚀 Улучшить реген")],
-        [KeyboardButton(text="🔋 Купить энергию"),
-         KeyboardButton(text="📊 Профиль")]
+        [KeyboardButton(text="🚀 Купить автоклик")],
+        [KeyboardButton(text="📊 Профиль")]
     ],
     resize_keyboard=True
 )
 
-# ---------- ВОССТАНОВЛЕНИЕ ЭНЕРГИИ ----------
-def restore_energy(user):
-    now = datetime.datetime.utcnow()
-    seconds = (now - user.last_energy_update).total_seconds()
 
-    if seconds <= 0:
-        return
+# ========================
+# ХЕНДЛЕРЫ
+# ========================
 
-    restored = seconds * user.energy_regen
-
-    if restored > 0:
-        user.energy = min(user.max_energy, user.energy + restored)
-        user.last_energy_update = now
-
-# ---------- СТАРТ ----------
-@dp.message(Command("start"))
-async def start(message: types.Message):
+@dp.message(CommandStart())
+async def start(message: Message):
     async with SessionLocal() as session:
-        result = await session.execute(
-            select(User).where(User.user_id == message.from_user.id)
-        )
-        user = result.scalar_one_or_none()
-
-        if not user:
-            user = User(user_id=message.from_user.id)
-            session.add(user)
-            await session.commit()
-
-    await message.answer("🔥 Добро пожаловать в TAP GAME!", reply_markup=keyboard)
-
-# ---------- ТАП ----------
-@dp.message(lambda m: m.text == "👆 Тап")
-async def tap(message: types.Message):
-    async with SessionLocal() as session:
-        result = await session.execute(
-            select(User).where(User.user_id == message.from_user.id)
-        )
-        user = result.scalar_one()
-
-        restore_energy(user)
-
-        if user.energy >= 1:
-            user.energy -= 1
-            user.balance += user.tap_power
-            user.xp += 1
-            await session.commit()
-            await message.answer(f"+{user.tap_power} очков 💰")
-        else:
-            await session.commit()
-            await message.answer("❌ Нет энергии!")
-# ---------- ПРОФИЛЬ ----------
-@dp.message(lambda m: m.text == "📊 Профиль")
-async def profile(message: types.Message):
-    async with SessionLocal() as session:
-        result = await session.execute(
-            select(User).where(User.user_id == message.from_user.id)
-        )
-        user = result.scalar_one()
-
-        restore_energy(user)
+        user = await get_user(session, message.from_user.id)
+        await update_balance(user)
         await session.commit()
 
-        text = (
+        await message.answer(
+            "🔥 Добро пожаловать в TAP GAME!\n\n"
+            "Зарабатывай монеты 👇",
+            reply_markup=main_kb
+        )
+
+
+@dp.message(F.text == "👆 Тап")
+async def tap(message: Message):
+    async with SessionLocal() as session:
+        user = await get_user(session, message.from_user.id)
+
+        await update_balance(user)
+
+        user.balance += user.tap_power
+
+        await session.commit()
+
+        await message.answer(f"💰 Баланс: {user.balance}")
+
+
+@dp.message(F.text == "🚀 Купить автоклик")
+async def buy_auto(message: Message):
+    async with SessionLocal() as session:
+        user = await get_user(session, message.from_user.id)
+
+        await update_balance(user)
+
+        cost = 100 + (user.auto_click * 50)
+
+        if user.balance >= cost:
+            user.balance -= cost
+            user.auto_click += 1
+            await session.commit()
+
+            await message.answer(
+                f"✅ Автоклик улучшен!\n"
+                f"Теперь: {user.auto_click} монет/сек\n"
+                f"💰 Баланс: {user.balance}"
+            )
+        else:
+            await message.answer(
+                f"❌ Нужно {cost} монет\n"
+                f"💰 Баланс: {user.balance}"
+            )
+
+
+@dp.message(F.text == "📊 Профиль")
+async def profile(message: Message):
+    async with SessionLocal() as session:
+        user = await get_user(session, message.from_user.id)
+
+        await update_balance(user)
+        await session.commit()
+
+        await message.answer(
+            f"📊 Профиль\n\n"
             f"💰 Баланс: {user.balance}\n"
-            f"⚡ Энергия: {round(user.energy,1)}/{user.max_energy}\n"
-            f"👆 Тап: {user.tap_power}\n"
-            f"🚀 Реген: {user.energy_regen}/сек\n"
+            f"👆 Сила тапа: {user.tap_power}\n"
+            f"⚡ Автоклик: {user.auto_click}/сек"
         )
 
-        await message.answer(text)
 
-# ---------- УЛУЧШЕНИЕ ТАПА ----------
-@dp.message(lambda m: m.text == "⚡ Улучшить тап")
-async def upgrade_tap(message: types.Message):
-    async with SessionLocal() as session:
-        result = await session.execute(
-            select(User).where(User.user_id == message.from_user.id)
-        )
-        user = result.scalar_one()
+# ========================
+# ЗАПУСК
+# ========================
 
-        cost = 100 * user.tap_power
-
-        if user.balance >= cost:
-            user.balance -= cost
-            user.tap_power += 1
-            await session.commit()
-            await message.answer("✅ Тап усилен!")
-        else:
-            await message.answer(f"❌ Нужно {cost} очков")
-
-# ---------- УЛУЧШЕНИЕ РЕГЕНА ----------
-@dp.message(lambda m: m.text == "🚀 Улучшить реген")
-async def upgrade_regen(message: types.Message):
-    async with SessionLocal() as session:
-        result = await session.execute(
-            select(User).where(User.user_id == message.from_user.id)
-        )
-        user = result.scalar_one()
-
-        cost = int(200 * user.energy_regen)
-
-        if user.balance >= cost:
-            user.balance -= cost
-            user.energy_regen += 0.5
-            await session.commit()
-            await message.answer("🚀 Реген ускорен!")
-        else:
-            await message.answer(f"❌ Нужно {cost} очков")
-
-# ---------- КУПИТЬ ЭНЕРГИЮ ----------
-@dp.message(lambda m: m.text == "🔋 Купить энергию")
-async def buy_energy(message: types.Message):
-    async with SessionLocal() as session:
-        result = await session.execute(
-            select(User).where(User.user_id == message.from_user.id)
-        )
-        user = result.scalar_one()
-
-        if user.balance >= 50:
-            user.balance -= 50
-            user.energy = min(user.max_energy, user.energy + 5)
-            await session.commit()
-            await message.answer("🔋 +5 энергии")
-        else:
-            await message.answer("❌ Нужно 50 очков")
-
-# ---------- ЗАПУСК ----------
 async def main():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
+    await init_db()
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

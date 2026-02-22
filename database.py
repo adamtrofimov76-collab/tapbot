@@ -5,9 +5,8 @@ from sqlalchemy.orm import sessionmaker
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
-    raise ValueError("DATABASE_URL не найден в переменных среды")
+    raise ValueError("DATABASE_URL не найден")
 
-# Railway даёт postgres:// — меняем на async
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace(
         "postgres://",

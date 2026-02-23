@@ -1,25 +1,32 @@
 import os
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
-from models import Base
+from datetime import datetime
+
+from sqlalchemy import BigInteger, Integer, Float, DateTime
+from sqlalchemy.orm import declarative_base, Mapped, mapped_column
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-if DATABASE_URL.startswith("postgresql://"):
-    DATABASE_URL = DATABASE_URL.replace(
-        "postgresql://",
-        "postgresql+asyncpg://"
-    )
+engine = create_async_engine(DATABASE_URL)
 
-engine = create_async_engine(DATABASE_URL, echo=False)
-
-SessionLocal = sessionmaker(
+AsyncSessionLocal = async_sessionmaker(
     engine,
-    class_=AsyncSession,
     expire_on_commit=False
 )
 
+Base = declarative_base()
 
-async def init_db():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+
+class User(Base):
+    __tablename__ = "users"
+
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    balance: Mapped[int] = mapped_column(Integer, default=0)
+    energy: Mapped[float] = mapped_column(Float, default=1000)
+    max_energy: Mapped[int] = mapped_column(Integer, default=1000)
+    tap_power: Mapped[int] = mapped_column(Integer, default=1)
+    energy_regen: Mapped[float] = mapped_column(Float, default=0.5)
+    xp: Mapped[int] = mapped_column(Integer, default=0)
+    level: Mapped[int] = mapped_column(Integer, default=1)
+    last_energy_update: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

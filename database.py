@@ -34,8 +34,8 @@ class User(Base):
     user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     balance: Mapped[int] = mapped_column(Integer, default=0)
 
-    energy: Mapped[float] = mapped_column(Float, default=1000)
-    max_energy: Mapped[int] = mapped_column(Integer, default=1000)
+    energy: Mapped[float] = mapped_column(Float, default=100)
+    max_energy: Mapped[int] = mapped_column(Integer, default=100)
     tap_power: Mapped[int] = mapped_column(Integer, default=1)
     energy_regen: Mapped[float] = mapped_column(Float, default=1)
 
@@ -48,3 +48,4 @@ class User(Base):
     last_farm_update: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow
     )
+

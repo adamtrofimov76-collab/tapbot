@@ -1,15 +1,15 @@
-import os
 import asyncio
 from datetime import datetime
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import Command
-from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 
 from sqlalchemy import select
 
+import os
 from database import AsyncSessionLocal, User
 
 
@@ -23,19 +23,27 @@ bot = Bot(
 dp = Dispatcher()
 
 
-# ---------- ЭНЕРГИЯ ----------
+# Клавиатура
+keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="👇 Тап")],
+        [KeyboardButton(text="📊 Профиль")]
+    ],
+    resize_keyboard=True
+)
 
-def update_energy(user: User):
+
+# Реген энергии
+async def update_energy(user: User):
     now = datetime.utcnow()
     seconds_passed = (now - user.last_energy_update).total_seconds()
 
-    regenerated = seconds_passed * user.energy_regen
-    user.energy = min(user.max_energy, user.energy + regenerated)
+    regen_amount = seconds_passed * user.energy_regen
 
-    user.last_energy_update = now
+    if regen_amount > 0:
+        user.energy = min(user.max_energy, user.energy + regen_amount)
+        user.last_energy_update = now
 
-
-# ---------- /start ----------
 
 @dp.message(Command("start"))
 async def start_handler(message: Message):
@@ -51,34 +59,29 @@ async def start_handler(message: Message):
             await session.commit()
 
         await message.answer(
-            f"🔥 Добро пожаловать!\n\n"
+            f"🔥 <b>Добро пожаловать!</b>\n\n"
             f"💰 Баланс: {user.balance}\n"
-            f"⚡ Энергия: {int(user.energy)}"
+            f"⚡ Энергия: {int(user.energy)}",
+            reply_markup=keyboard
         )
 
 
-# ---------- ТАП ----------
-
-@dp.message(F.text == "Тап")
+@dp.message(F.text == "👇 Тап")
 async def tap_handler(message: Message):
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(User).where(User.user_id == message.from_user.id)
         )
-        user = result.scalar_one_or_none()
+        user = result.scalar_one()
 
-        if not user:
-            return
-
-        update_energy(user)
+        await update_energy(user)
 
         if user.energy < user.tap_power:
-            await message.answer("❌ Недостаточно энергии!")
+            await message.answer("❌ Нет энергии!")
             return
 
         user.energy -= user.tap_power
         user.balance += user.tap_power
-        user.xp += 1
 
         await session.commit()
 
@@ -88,9 +91,29 @@ async def tap_handler(message: Message):
         )
 
 
-# ---------- ЗАПУСК ----------
+@dp.message(F.text == "📊 Профиль")
+async def profile_handler(message: Message):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(User).where(User.user_id == message.from_user.id)
+        )
+        user = result.scalar_one()
+
+        await update_energy(user)
+        await session.commit()
+
+        await message.answer(
+            f"📊 <b>Профиль</b>\n\n"
+            f"💰 Баланс: {user.balance}\n"
+            f"⚡ Энергия: {int(user.energy)}"
+        )
+
 
 async def main():
+    from database import Base, engine
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
     await dp.start_polling(bot)
 
 

@@ -23,28 +23,42 @@ bot = Bot(
 dp = Dispatcher()
 
 
-# Клавиатура
 keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="👇 Тап")],
+        [KeyboardButton(text="⚡ Улучшить тап"), KeyboardButton(text="🚀 Улучшить реген")],
+        [KeyboardButton(text="💵 Купить энергию")],
+        [KeyboardButton(text="🤖 Авто-фарм")],
         [KeyboardButton(text="📊 Профиль")]
     ],
     resize_keyboard=True
 )
 
 
-# Реген энергии
+# -------- ЭНЕРГИЯ --------
 async def update_energy(user: User):
     now = datetime.utcnow()
-    seconds_passed = (now - user.last_energy_update).total_seconds()
+    seconds = (now - user.last_energy_update).total_seconds()
 
-    regen_amount = seconds_passed * user.energy_regen
-
-    if regen_amount > 0:
-        user.energy = min(user.max_energy, user.energy + regen_amount)
-        user.last_energy_update = now
+    regen = seconds * user.energy_regen
+    user.energy = min(user.max_energy, user.energy + regen)
+    user.last_energy_update = now
 
 
+# -------- АВТОФАРМ --------
+async def update_auto_farm(user: User):
+    if not user.auto_farm_enabled or user.auto_farm_level == 0:
+        return
+
+    now = datetime.utcnow()
+    seconds = (now - user.last_farm_update).total_seconds()
+
+    earned = int(seconds * user.auto_farm_level)
+    user.balance += earned
+    user.last_farm_update = now
+
+
+# -------- START --------
 @dp.message(Command("start"))
 async def start_handler(message: Message):
     async with AsyncSessionLocal() as session:
@@ -59,13 +73,14 @@ async def start_handler(message: Message):
             await session.commit()
 
         await message.answer(
-            f"🔥 <b>Добро пожаловать!</b>\n\n"
+            f"🔥 Добро пожаловать!\n\n"
             f"💰 Баланс: {user.balance}\n"
             f"⚡ Энергия: {int(user.energy)}",
             reply_markup=keyboard
         )
 
 
+# -------- ТАП --------
 @dp.message(F.text == "👇 Тап")
 async def tap_handler(message: Message):
     async with AsyncSessionLocal() as session:
@@ -75,6 +90,7 @@ async def tap_handler(message: Message):
         user = result.scalar_one()
 
         await update_energy(user)
+        await update_auto_farm(user)
 
         if user.energy < user.tap_power:
             await message.answer("❌ Нет энергии!")
@@ -91,8 +107,98 @@ async def tap_handler(message: Message):
         )
 
 
+# -------- УЛУЧШЕНИЯ --------
+@dp.message(F.text == "⚡ Улучшить тап")
+async def upgrade_tap(message: Message):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(User).where(User.user_id == message.from_user.id)
+        )
+        user = result.scalar_one()
+
+        cost = user.tap_power * 100
+
+        if user.balance < cost:
+            await message.answer("❌ Недостаточно денег!")
+            return
+
+        user.balance -= cost
+        user.tap_power += 1
+        await session.commit()
+
+        await message.answer(f"⚡ Tap power теперь: {user.tap_power}")
+
+
+@dp.message(F.text == "🚀 Улучшить реген")
+async def upgrade_regen(message: Message):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(User).where(User.user_id == message.from_user.id)
+        )
+        user = result.scalar_one()
+
+        cost = int(user.energy_regen * 200)
+
+        if user.balance < cost:
+            await message.answer("❌ Недостаточно денег!")
+            return
+
+        user.balance -= cost
+        user.energy_regen += 0.5
+        await session.commit()
+
+        await message.answer(f"🚀 Реген теперь: {user.energy_regen}/сек")
+
+
+@dp.message(F.text == "💵 Купить энергию")
+async def buy_energy(message: Message):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(User).where(User.user_id == message.from_user.id)
+        )
+        user = result.scalar_one()
+
+        cost = 200
+
+        if user.balance < cost:
+            await message.answer("❌ Недостаточно денег!")
+            return
+
+        user.balance -= cost
+        user.energy = user.max_energy
+        await session.commit()
+
+        await message.answer("⚡ Энергия восстановлена!")
+
+
+@dp.message(F.text == "🤖 Авто-фарм")
+async def auto_farm(message: Message):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(User).where(User.user_id == message.from_user.id)
+        )
+        user = result.scalar_one()
+
+        cost = (user.auto_farm_level + 1) * 500
+
+        if user.balance < cost:
+            await message.answer(f"❌ Нужно {cost} монет")
+            return
+
+        user.balance -= cost
+        user.auto_farm_level += 1
+        user.auto_farm_enabled = True
+
+        await session.commit()
+
+        await message.answer(
+            f"🤖 Авто-фарм уровень: {user.auto_farm_level}\n"
+            f"Фармит {user.auto_farm_level} монет/сек"
+        )
+
+
 @dp.message(F.text == "📊 Профиль")
-async def profile_handler(message: Message):
+async def profile(message: Message):
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(User).where(User.user_id == message.from_user.id)
@@ -100,12 +206,16 @@ async def profile_handler(message: Message):
         user = result.scalar_one()
 
         await update_energy(user)
+        await update_auto_farm(user)
         await session.commit()
 
         await message.answer(
-            f"📊 <b>Профиль</b>\n\n"
+            f"📊 Профиль\n\n"
             f"💰 Баланс: {user.balance}\n"
-            f"⚡ Энергия: {int(user.energy)}"
+            f"⚡ Энергия: {int(user.energy)}\n"
+            f"⚡ Tap power: {user.tap_power}\n"
+            f"🚀 Реген: {user.energy_regen}/сек\n"
+            f"🤖 Авто-фарм: {user.auto_farm_level}/сек"
         )
 
 

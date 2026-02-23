@@ -10,7 +10,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL not set!")
 
-# Меняем Railway URL на asyncpg
+# Railway URL → asyncpg
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace(
         "postgres://",
@@ -38,9 +38,7 @@ class User(Base):
     energy: Mapped[float] = mapped_column(Float, default=1000)
     max_energy: Mapped[int] = mapped_column(Integer, default=1000)
     tap_power: Mapped[int] = mapped_column(Integer, default=1)
-    energy_regen: Mapped[float] = mapped_column(Float, default=0.5)
-    xp: Mapped[int] = mapped_column(Integer, default=0)
-    level: Mapped[int] = mapped_column(Integer, default=1)
+    energy_regen: Mapped[float] = mapped_column(Float, default=1)
     last_energy_update: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow

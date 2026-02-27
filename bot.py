@@ -2,245 +2,7 @@ import asyncio
 from datetime import datetime
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
-from aiogram.filters import Command
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
-
-from sqlalchemy import select
-
-import os
-from database import AsyncSessionLocal, User
-
-
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-
-bot = Bot(
-    token=BOT_TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
-)
-
-dp = Dispatcher()
-
-
-keyboard = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="👇 Тап")],
-        [KeyboardButton(text="⚡ Улучшить тап"), KeyboardButton(text="🚀 Улучшить реген")],
-        [KeyboardButton(text="💵 Купить энергию")],
-        [KeyboardButton(text="🤖 Авто-фарм")],
-        [KeyboardButton(text="📊 Профиль")]
-    ],
-    resize_keyboard=True
-)
-
-
-# -------- ЭНЕРГИЯ --------
-async def update_energy(user: User):
-    now = datetime.utcnow()
-    seconds = (now - user.last_energy_update).total_seconds()
-
-    regen = seconds * user.energy_regen
-    user.energy = min(user.max_energy, user.energy + regen)
-    user.last_energy_update = now
-
-
-# -------- АВТОФАРМ --------
-async def update_auto_farm(user: User):
-    if not user.auto_farm_enabled or user.auto_farm_level == 0:
-        return
-
-    now = datetime.utcnow()
-    seconds = (now - user.last_farm_update).total_seconds()
-
-    earned = int(seconds * user.auto_farm_level)
-    user.balance += earned
-    user.last_farm_update = now
-
-
-# -------- START --------
-@dp.message(Command("start"))
-async def start_handler(message: Message):
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(User).where(User.user_id == message.from_user.id)
-        )
-        user = result.scalar_one_or_none()
-
-        if not user:
-            user = User(user_id=message.from_user.id)
-            session.add(user)
-            await session.commit()
-
-        await message.answer(
-            f"🔥 Добро пожаловать!\n\n"
-            f"💰 Баланс: {user.balance}\n"
-            f"⚡ Энергия: {int(user.energy)}",
-            reply_markup=keyboard
-        )
-
-
-# -------- ТАП --------
-@dp.message(F.text == "👇 Тап")
-async def tap_handler(message: Message):
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(User).where(User.user_id == message.from_user.id)
-        )
-        user = result.scalar_one()
-
-        await update_energy(user)
-        await update_auto_farm(user)
-
-        if user.energy < user.tap_power:
-            await message.answer("❌ Нет энергии!")
-            return
-
-        user.energy -= user.tap_power
-        user.balance += user.tap_power
-
-        await session.commit()
-
-        await message.answer(
-            f"💰 Баланс: {user.balance}\n"
-            f"⚡ Энергия: {int(user.energy)}"
-        )
-
-
-# -------- УЛУЧШЕНИЯ --------
-@dp.message(F.text == "⚡ Улучшить тап")
-async def upgrade_tap(message: Message):
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(User).where(User.user_id == message.from_user.id)
-        )
-        user = result.scalar_one()
-
-        cost = user.tap_power * 100
-
-        if user.balance < cost:
-            await message.answer("❌ Недостаточно денег!")
-            return
-
-        user.balance -= cost
-        user.tap_power += 1
-        await session.commit()
-
-        await message.answer(f"⚡ Tap power теперь: {user.tap_power}")
-
-
-@dp.message(F.text == "🚀 Улучшить реген")
-async def upgrade_regen(message: Message):
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(User).where(User.user_id == message.from_user.id)
-        )
-        user = result.scalar_one()
-
-        cost = int(user.energy_regen * 200)
-
-        if user.balance < cost:
-            await message.answer("❌ Недостаточно денег!")
-            return
-
-        user.balance -= cost
-        user.energy_regen += 0.5
-        await session.commit()
-
-        await message.answer(f"🚀 Реген теперь: {user.energy_regen}/сек")
-
-
-@dp.message(F.text == "💵 Купить энергию")
-async def buy_energy(message: Message):
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(User).where(User.user_id == message.from_user.id)
-        )
-        user = result.scalar_one()
-
-        cost = 200
-
-        if user.balance < cost:
-            await message.answer("❌ Недостаточно денег!")
-            return
-
-        user.balance -= cost
-        user.energy = user.max_energy
-        await session.commit()
-
-        await message.answer("⚡ Энергия восстановлена!")
-
-
-@dp.message(F.text == "🤖 Авто-фарм")
-async def auto_farm(message: Message):
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(User).where(User.user_id == message.from_user.id)
-        )
-        user = result.scalar_one()
-
-        cost = (user.auto_farm_level + 1) * 500
-
-        if user.balance < cost:
-            await message.answer(f"❌ Нужно {cost} монет")
-            return
-
-        user.balance -= cost
-        user.auto_farm_level += 1
-        user.auto_farm_enabled = True
-
-        await session.commit()
-
-        await message.answer(
-            f"🤖 Авто-фарм уровень: {user.auto_farm_level}\n"
-            f"Фармит {user.auto_farm_level} монет/сек"
-        )
-
-
-@dp.message(F.text == "📊 Профиль")
-async def profile(message: Message):
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(User).where(User.user_id == message.from_user.id)
-        )
-        user = result.scalar_one()
-
-        await update_energy(user)
-        await update_auto_farm(user)
-        await session.commit()
-
-        await message.answer(
-            f"📊 Профиль\n\n"
-            f"💰 Баланс: {user.balance}\n"
-            f"⚡ Энергия: {int(user.energy)}\n"
-            f"⚡ Tap power: {user.tap_power}\n"
-            f"🚀 Реген: {user.energy_regen}/сек\n"
-            f"🤖 Авто-фарм: {user.auto_farm_level}/сек"
-        )
-
-
-async def main():
-    from database import Base, engine
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    await dp.start_polling(bot)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
-import asyncio
-from datetime import datetime
-
-from aiogram import Bot, Dispatcher, F
-from aiogram.types import (
-    Message,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-    CallbackQuery,
-)
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -278,36 +40,41 @@ def get_auto_farm_upgrade_cost(user: User) -> int:
     return (user.auto_farm_level + 1) * 500
 
 
-def build_keyboard(user: User) -> InlineKeyboardMarkup:
+def build_keyboard(user: User) -> ReplyKeyboardMarkup:
     tap_cost = get_tap_upgrade_cost(user)
     regen_cost = get_regen_upgrade_cost(user)
     auto_farm_cost = get_auto_farm_upgrade_cost(user)
 
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="👇 Тап", callback_data="tap")],
-            [InlineKeyboardButton(text=f"⚡ Улучшить тап • {tap_cost}💰", callback_data="upgrade_tap")],
-            [InlineKeyboardButton(text=f"🚀 Улучшить реген • {regen_cost}💰", callback_data="upgrade_regen")],
-            [InlineKeyboardButton(text="💵 Купить энергию • 200💰", callback_data="buy_energy")],
-            [InlineKeyboardButton(text=f"🤖 Авто-фарм • {auto_farm_cost}💰", callback_data="auto_farm")],
-            [InlineKeyboardButton(text="🏆 Рейтинг", callback_data="rating_menu")],
-            [InlineKeyboardButton(text="📊 Профиль", callback_data="show_profile")],
-        ]
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="👇 Тап")],
+            [KeyboardButton(text=f"⚡ Улучшить тап • {tap_cost}💰")],
+            [KeyboardButton(text=f"🚀 Улучшить реген • {regen_cost}💰")],
+            [KeyboardButton(text="💵 Купить энергию • 200💰")],
+            [KeyboardButton(text=f"🤖 Авто-фарм • {auto_farm_cost}💰")],
+            [KeyboardButton(text="🏆 Рейтинг")],
+            [KeyboardButton(text="📊 Профиль")],
+        ],
+        resize_keyboard=True,
     )
 
 
-def build_rating_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="💰 Топ по балансу", callback_data="top_balance")],
-            [InlineKeyboardButton(text="🤖 Топ по авто-фарму", callback_data="top_auto_farm")],
-            [InlineKeyboardButton(text="🚀 Топ по регену", callback_data="top_regen")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main")],
-        ]
-    )
 
+
+def build_rating_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="💰 Топ по балансу")],
+            [KeyboardButton(text="🤖 Топ по авто-фарму")],
+            [KeyboardButton(text="🚀 Топ по регену")],
+            [KeyboardButton(text="⬅️ Назад")],
+        ],
+        resize_keyboard=True,
+    )
 
 async def send_with_fresh_keyboard(message: Message, text: str, user: User) -> Message:
+    # Принудительно сбрасываем старую клавиатуру, чтобы Telegram-клиент точно принял новую разметку
+    await message.answer("🔄 Обновляю клавиатуру...", reply_markup=ReplyKeyboardRemove())
     sent = await message.answer(text, reply_markup=build_keyboard(user))
     return sent
 
@@ -349,32 +116,23 @@ async def upsert_status_message(message: Message, user: User, prefix: str | None
         text = f"{prefix}\n\n{text}"
 
     cached_message_id = last_status_message_ids.get(user.user_id)
-    target_message_id = cached_message_id or message.message_id
 
-    try:
-        await bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=target_message_id,
-            text=text,
-            reply_markup=build_keyboard(user),
-        )
-        last_status_message_ids[user.user_id] = target_message_id
-        return
-    except Exception:
-        pass
+    if cached_message_id is not None:
+        try:
+            await bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=cached_message_id,
+                text=text,
+                reply_markup=build_keyboard(user),
+            )
+            return
+        except Exception:
+            pass
 
-    # Fallback только если редактирование реально невозможно.
     sent = await message.answer(text, reply_markup=build_keyboard(user))
     last_status_message_ids[user.user_id] = sent.message_id
 
 
-async def hide_user_button_message(message: Message):
-    # В приватных чатах удаляем сообщение с текстом нажатой кнопки,
-    # чтобы чат не засорялся отправленными названиями кнопок.
-    try:
-        await bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
-    except Exception:
-        pass
 
 
 # -------- START --------
@@ -409,8 +167,6 @@ async def start_handler(message: Message):
 # -------- ТАП --------
 @dp.message(F.text == "👇 Тап")
 async def tap_handler(message: Message):
-    await hide_user_button_message(message)
-
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(User).where(User.user_id == message.from_user.id)
@@ -435,8 +191,6 @@ async def tap_handler(message: Message):
 # -------- УЛУЧШЕНИЯ --------
 @dp.message(F.text.startswith("⚡ Улучшить тап") | F.text.startswith("⚡ Тап +1"))
 async def upgrade_tap(message: Message):
-    await hide_user_button_message(message)
-
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(User).where(User.user_id == message.from_user.id)
@@ -446,20 +200,21 @@ async def upgrade_tap(message: Message):
         cost = get_tap_upgrade_cost(user)
 
         if user.balance < cost:
-            await upsert_status_message(message, user, prefix="❌ Недостаточно денег!")
+            await message.answer("❌ Недостаточно денег!", reply_markup=build_keyboard(user))
             return
 
         user.balance -= cost
         user.tap_power += 1
         await session.commit()
 
-        await upsert_status_message(message, user, prefix=f"⚡ Tap power теперь: {user.tap_power}")
+        await message.answer(
+            f"⚡ Tap power теперь: {user.tap_power}",
+            reply_markup=build_keyboard(user),
+        )
 
 
 @dp.message(F.text.startswith("🚀 Улучшить реген") | F.text.startswith("🚀 Реген +0.5"))
 async def upgrade_regen(message: Message):
-    await hide_user_button_message(message)
-
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(User).where(User.user_id == message.from_user.id)
@@ -469,20 +224,21 @@ async def upgrade_regen(message: Message):
         cost = get_regen_upgrade_cost(user)
 
         if user.balance < cost:
-            await upsert_status_message(message, user, prefix="❌ Недостаточно денег!")
+            await message.answer("❌ Недостаточно денег!", reply_markup=build_keyboard(user))
             return
 
         user.balance -= cost
         user.energy_regen += 0.5
         await session.commit()
 
-        await upsert_status_message(message, user, prefix=f"🚀 Реген теперь: {user.energy_regen}/сек")
+        await message.answer(
+            f"🚀 Реген теперь: {user.energy_regen}/сек",
+            reply_markup=build_keyboard(user),
+        )
 
 
 @dp.message(F.text.startswith("💵 Купить энергию") | F.text.startswith("💵 Энергия"))
 async def buy_energy(message: Message):
-    await hide_user_button_message(message)
-
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(User).where(User.user_id == message.from_user.id)
@@ -492,20 +248,18 @@ async def buy_energy(message: Message):
         cost = 200
 
         if user.balance < cost:
-            await upsert_status_message(message, user, prefix="❌ Недостаточно денег!")
+            await message.answer("❌ Недостаточно денег!", reply_markup=build_keyboard(user))
             return
 
         user.balance -= cost
         user.energy = user.max_energy
         await session.commit()
 
-        await upsert_status_message(message, user, prefix="⚡ Энергия восстановлена!")
+        await message.answer("⚡ Энергия восстановлена!", reply_markup=build_keyboard(user))
 
 
 @dp.message(F.text.startswith("🤖 Авто-фарм") | F.text.startswith("🤖 Авто-фарм +1"))
 async def auto_farm(message: Message):
-    await hide_user_button_message(message)
-
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(User).where(User.user_id == message.from_user.id)
@@ -515,7 +269,7 @@ async def auto_farm(message: Message):
         cost = get_auto_farm_upgrade_cost(user)
 
         if user.balance < cost:
-            await upsert_status_message(message, user, prefix=f"❌ Нужно {cost} монет")
+            await message.answer(f"❌ Нужно {cost} монет", reply_markup=build_keyboard(user))
             return
 
         user.balance -= cost
@@ -524,13 +278,10 @@ async def auto_farm(message: Message):
 
         await session.commit()
 
-        await upsert_status_message(
-            message,
-            user,
-            prefix=(
-                f"🤖 Авто-фарм уровень: {user.auto_farm_level}\n"
-                f"Фармит {user.auto_farm_level} монет/сек"
-            ),
+        await message.answer(
+            f"🤖 Авто-фарм уровень: {user.auto_farm_level}\n"
+            f"Фармит {user.auto_farm_level} монет/сек",
+            reply_markup=build_keyboard(user),
         )
 
 
@@ -637,204 +388,6 @@ async def profile(message: Message):
             f"🤖 Авто-фарм: {user.auto_farm_level}/сек",
             user,
         )
-
-
-@dp.callback_query(F.data == "tap")
-async def tap_callback(callback: CallbackQuery):
-    if not callback.message:
-        return
-    msg = callback.message
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(select(User).where(User.user_id == callback.from_user.id))
-        user = result.scalar_one()
-
-        await update_energy(user)
-        await update_auto_farm(user)
-
-        if user.energy < user.tap_power:
-            await upsert_status_message(msg, user, prefix="❌ Нет энергии!")
-            await callback.answer("Нет энергии")
-            return
-
-        user.energy -= user.tap_power
-        user.balance += user.tap_power
-        await session.commit()
-
-        await upsert_status_message(msg, user)
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "upgrade_tap")
-async def upgrade_tap_callback(callback: CallbackQuery):
-    if not callback.message:
-        return
-    msg = callback.message
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(select(User).where(User.user_id == callback.from_user.id))
-        user = result.scalar_one()
-        cost = get_tap_upgrade_cost(user)
-
-        if user.balance < cost:
-            await upsert_status_message(msg, user, prefix="❌ Недостаточно денег!")
-            await callback.answer("Недостаточно денег")
-            return
-
-        user.balance -= cost
-        user.tap_power += 1
-        await session.commit()
-        await upsert_status_message(msg, user, prefix=f"⚡ Tap power теперь: {user.tap_power}")
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "upgrade_regen")
-async def upgrade_regen_callback(callback: CallbackQuery):
-    if not callback.message:
-        return
-    msg = callback.message
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(select(User).where(User.user_id == callback.from_user.id))
-        user = result.scalar_one()
-        cost = get_regen_upgrade_cost(user)
-
-        if user.balance < cost:
-            await upsert_status_message(msg, user, prefix="❌ Недостаточно денег!")
-            await callback.answer("Недостаточно денег")
-            return
-
-        user.balance -= cost
-        user.energy_regen += 0.5
-        await session.commit()
-        await upsert_status_message(msg, user, prefix=f"🚀 Реген теперь: {user.energy_regen}/сек")
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "buy_energy")
-async def buy_energy_callback(callback: CallbackQuery):
-    if not callback.message:
-        return
-    msg = callback.message
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(select(User).where(User.user_id == callback.from_user.id))
-        user = result.scalar_one()
-
-        if user.balance < 200:
-            await upsert_status_message(msg, user, prefix="❌ Недостаточно денег!")
-            await callback.answer("Недостаточно денег")
-            return
-
-        user.balance -= 200
-        user.energy = user.max_energy
-        await session.commit()
-        await upsert_status_message(msg, user, prefix="⚡ Энергия восстановлена!")
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "auto_farm")
-async def auto_farm_callback(callback: CallbackQuery):
-    if not callback.message:
-        return
-    msg = callback.message
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(select(User).where(User.user_id == callback.from_user.id))
-        user = result.scalar_one()
-
-        cost = get_auto_farm_upgrade_cost(user)
-        if user.balance < cost:
-            await upsert_status_message(msg, user, prefix=f"❌ Нужно {cost} монет")
-            await callback.answer("Недостаточно денег")
-            return
-
-        user.balance -= cost
-        user.auto_farm_level += 1
-        user.auto_farm_enabled = True
-        await session.commit()
-        await upsert_status_message(
-            msg,
-            user,
-            prefix=(
-                f"🤖 Авто-фарм уровень: {user.auto_farm_level}\n"
-                f"Фармит {user.auto_farm_level} монет/сек"
-            ),
-        )
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "show_profile")
-async def profile_callback(callback: CallbackQuery):
-    if not callback.message:
-        return
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(select(User).where(User.user_id == callback.from_user.id))
-        user = result.scalar_one()
-
-        await update_energy(user)
-        await update_auto_farm(user)
-        await session.commit()
-
-        await callback.message.edit_text(
-            f"📊 Профиль\n\n"
-            f"💰 Баланс: {user.balance}\n"
-            f"⚡ Энергия: {int(user.energy)}\n"
-            f"⚡ Tap power: {user.tap_power}\n"
-            f"🚀 Реген: {user.energy_regen}/сек\n"
-            f"🤖 Авто-фарм: {user.auto_farm_level}/сек",
-            reply_markup=build_keyboard(user),
-        )
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "rating_menu")
-async def rating_menu_callback(callback: CallbackQuery):
-    if callback.message:
-        await callback.message.edit_text("🏆 Рейтинг\nВыбери категорию топ-5:", reply_markup=build_rating_keyboard())
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "back_main")
-async def back_main_callback(callback: CallbackQuery):
-    if not callback.message:
-        return
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(select(User).where(User.user_id == callback.from_user.id))
-        user = result.scalar_one()
-        await callback.message.edit_text("↩️ Вернул в главное меню", reply_markup=build_keyboard(user))
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "top_balance")
-async def top_balance_callback(callback: CallbackQuery):
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(select(User).order_by(desc(User.balance)).limit(5))
-        users = result.scalars().all()
-
-    lines = await format_top_lines(users, lambda u: f"{u.balance} 💰")
-    if callback.message:
-        await callback.message.edit_text(f"💰 <b>Топ-5 по балансу</b>\n\n{lines}", reply_markup=build_rating_keyboard())
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "top_auto_farm")
-async def top_auto_farm_callback(callback: CallbackQuery):
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(select(User).order_by(desc(User.auto_farm_level)).limit(5))
-        users = result.scalars().all()
-
-    lines = await format_top_lines(users, lambda u: f"{u.auto_farm_level}/сек")
-    if callback.message:
-        await callback.message.edit_text(f"🤖 <b>Топ-5 по авто-фарму</b>\n\n{lines}", reply_markup=build_rating_keyboard())
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "top_regen")
-async def top_regen_callback(callback: CallbackQuery):
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(select(User).order_by(desc(User.energy_regen)).limit(5))
-        users = result.scalars().all()
-
-    lines = await format_top_lines(users, lambda u: f"{u.energy_regen}/сек")
-    if callback.message:
-        await callback.message.edit_text(f"🚀 <b>Топ-5 по регену</b>\n\n{lines}", reply_markup=build_rating_keyboard())
-    await callback.answer()
 
 
 @dp.message(Command("version"))

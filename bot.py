@@ -15,6 +15,7 @@ from database import AsyncSessionLocal, User
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 APP_VERSION = os.getenv("RAILWAY_GIT_COMMIT_SHA", "local")[:7]
+GAME_VERSION = "0.0.1"
 
 bot = Bot(
     token=BOT_TOKEN,
@@ -107,7 +108,7 @@ async def start_handler(message: Message):
             f"Стань самым богатым фермером в нашей игре!\n\n"
             f"💰 Баланс: {user.balance}\n"
             f"⚡ Энергия: {int(user.energy)}\n"
-            f"🧩 Версия: {APP_VERSION}",
+            f"🎮 Версия игры: {GAME_VERSION}",
             user,
         )
 
@@ -136,7 +137,7 @@ async def tap_handler(message: Message):
         await message.answer(
             f"💰 Баланс: {user.balance}\n"
             f"⚡ Энергия: {int(user.energy)}\n"
-            f"🧩 Версия: {APP_VERSION}",
+            f"🎮 Версия игры: {GAME_VERSION}",
             reply_markup=build_keyboard(user),
         )
 
@@ -286,7 +287,8 @@ async def profile(message: Message):
 @dp.message(F.text.in_(["version", "Version", "версия", "Версия"]))
 async def version_handler(message: Message):
     await message.answer(
-        "ℹ️ Версия бота\n"
+        "ℹ️ Версия игры и деплоя\n"
+        f"🎮 game: {GAME_VERSION}\n"
         f"🧩 commit: {APP_VERSION}\n\n"
         "Если кнопки не меняются после /start — значит в Railway крутится старый деплой. "
         "Сделайте Redeploy последнего коммита и проверьте /version снова."

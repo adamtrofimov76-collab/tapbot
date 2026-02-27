@@ -7,7 +7,7 @@ from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from sqlalchemy import select
+from sqlalchemy import select, desc
 
 import os
 from database import AsyncSessionLocal, User
@@ -23,6 +23,9 @@ bot = Bot(
 )
 
 dp = Dispatcher()
+
+# user_id -> bot status message_id (for edit on tap)
+last_status_message_ids: dict[int, int] = {}
 
 
 def get_tap_upgrade_cost(user: User) -> int:
@@ -49,17 +52,31 @@ def build_keyboard(user: User) -> ReplyKeyboardMarkup:
             [KeyboardButton(text=f"🚀 Улучшить реген • {regen_cost}💰")],
             [KeyboardButton(text="💵 Купить энергию • 200💰")],
             [KeyboardButton(text=f"🤖 Авто-фарм • {auto_farm_cost}💰")],
+            [KeyboardButton(text="🏆 Рейтинг")],
             [KeyboardButton(text="📊 Профиль")],
-            [KeyboardButton(text="🔄 Обновить клавиатуру")],
         ],
         resize_keyboard=True,
     )
 
 
-async def send_with_fresh_keyboard(message: Message, text: str, user: User):
+
+
+def build_rating_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="💰 Топ по балансу")],
+            [KeyboardButton(text="🤖 Топ по авто-фарму")],
+            [KeyboardButton(text="🚀 Топ по регену")],
+            [KeyboardButton(text="⬅️ Назад")],
+        ],
+        resize_keyboard=True,
+    )
+
+async def send_with_fresh_keyboard(message: Message, text: str, user: User) -> Message:
     # Принудительно сбрасываем старую клавиатуру, чтобы Telegram-клиент точно принял новую разметку
     await message.answer("🔄 Обновляю клавиатуру...", reply_markup=ReplyKeyboardRemove())
-    await message.answer(text, reply_markup=build_keyboard(user))
+    sent = await message.answer(text, reply_markup=build_keyboard(user))
+    return sent
 
 
 # -------- ЭНЕРГИЯ --------
@@ -85,6 +102,39 @@ async def update_auto_farm(user: User):
     user.last_farm_update = now
 
 
+def build_status_text(user: User) -> str:
+    return (
+        f"💰 Баланс: {user.balance}\n"
+        f"⚡ Энергия: {int(user.energy)}\n"
+        f"🎮 Версия игры: {GAME_VERSION}"
+    )
+
+
+async def upsert_status_message(message: Message, user: User, prefix: str | None = None):
+    text = build_status_text(user)
+    if prefix:
+        text = f"{prefix}\n\n{text}"
+
+    cached_message_id = last_status_message_ids.get(user.user_id)
+
+    if cached_message_id is not None:
+        try:
+            await bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=cached_message_id,
+                text=text,
+                reply_markup=build_keyboard(user),
+            )
+            return
+        except Exception:
+            pass
+
+    sent = await message.answer(text, reply_markup=build_keyboard(user))
+    last_status_message_ids[user.user_id] = sent.message_id
+
+
+
+
 # -------- START --------
 @dp.message(Command("start"))
 async def start_handler(message: Message):
@@ -101,7 +151,7 @@ async def start_handler(message: Message):
 
         tg_name = message.from_user.first_name or message.from_user.username or "фермер"
 
-        await send_with_fresh_keyboard(
+        sent = await send_with_fresh_keyboard(
             message,
             f"👋 Привет, {tg_name}!\n"
             f"Ты попал на ферму, тут тебе надо усердно кликать и прокачивать свой огород.\n"
@@ -111,6 +161,7 @@ async def start_handler(message: Message):
             f"🎮 Версия игры: {GAME_VERSION}",
             user,
         )
+        last_status_message_ids[user.user_id] = sent.message_id
 
 
 # -------- ТАП --------
@@ -126,7 +177,7 @@ async def tap_handler(message: Message):
         await update_auto_farm(user)
 
         if user.energy < user.tap_power:
-            await message.answer("❌ Нет энергии!", reply_markup=build_keyboard(user))
+            await upsert_status_message(message, user, prefix="❌ Нет энергии!")
             return
 
         user.energy -= user.tap_power
@@ -134,12 +185,7 @@ async def tap_handler(message: Message):
 
         await session.commit()
 
-        await message.answer(
-            f"💰 Баланс: {user.balance}\n"
-            f"⚡ Энергия: {int(user.energy)}\n"
-            f"🎮 Версия игры: {GAME_VERSION}",
-            reply_markup=build_keyboard(user),
-        )
+        await upsert_status_message(message, user)
 
 
 # -------- УЛУЧШЕНИЯ --------
@@ -239,22 +285,72 @@ async def auto_farm(message: Message):
         )
 
 
-@dp.message(F.text == "🔄 Обновить клавиатуру")
-async def refresh_keyboard(message: Message):
+@dp.message(F.text == "🏆 Рейтинг")
+async def rating_menu(message: Message):
+    await message.answer("🏆 Рейтинг\nВыбери категорию топ-5:", reply_markup=build_rating_keyboard())
+
+
+@dp.message(F.text == "⬅️ Назад")
+async def rating_back(message: Message):
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(User).where(User.user_id == message.from_user.id)
         )
         user = result.scalar_one()
 
-        await update_energy(user)
-        await update_auto_farm(user)
-        await session.commit()
+        await message.answer("↩️ Вернул в главное меню", reply_markup=build_keyboard(user))
 
-        await send_with_fresh_keyboard(
-            message,
-            "✅ Клавиатура обновлена.",
-            user,
+
+def format_top_lines(users: list[User], value_getter) -> str:
+    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+    lines: list[str] = []
+    for i, u in enumerate(users):
+        lines.append(f"{medals[i]} ID <code>{u.user_id}</code> — {value_getter(u)}")
+    return "\n".join(lines) if lines else "Пока нет данных"
+
+
+@dp.message(F.text == "💰 Топ по балансу")
+async def top_balance(message: Message):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(User).order_by(desc(User.balance)).limit(5)
+        )
+        users = result.scalars().all()
+
+        lines = format_top_lines(users, lambda u: f"{u.balance} 💰")
+        await message.answer(
+            f"💰 <b>Топ-5 по балансу</b>\n\n{lines}",
+            reply_markup=build_rating_keyboard(),
+        )
+
+
+@dp.message(F.text == "🤖 Топ по авто-фарму")
+async def top_auto_farm(message: Message):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(User).order_by(desc(User.auto_farm_level)).limit(5)
+        )
+        users = result.scalars().all()
+
+        lines = format_top_lines(users, lambda u: f"{u.auto_farm_level}/сек")
+        await message.answer(
+            f"🤖 <b>Топ-5 по авто-фарму</b>\n\n{lines}",
+            reply_markup=build_rating_keyboard(),
+        )
+
+
+@dp.message(F.text == "🚀 Топ по регену")
+async def top_regen(message: Message):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(User).order_by(desc(User.energy_regen)).limit(5)
+        )
+        users = result.scalars().all()
+
+        lines = format_top_lines(users, lambda u: f"{u.energy_regen}/сек")
+        await message.answer(
+            f"🚀 <b>Топ-5 по регену</b>\n\n{lines}",
+            reply_markup=build_rating_keyboard(),
         )
 
 

@@ -1,3 +1,5 @@
 aiogram
 sqlalchemy
 asyncpg
+fastapi
+uvicorn[standard]

@@ -2,7 +2,15 @@ import asyncio
 from datetime import datetime
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.types import (
+    Message,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardRemove,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    CallbackQuery,
+)
 from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -40,37 +48,34 @@ def get_auto_farm_upgrade_cost(user: User) -> int:
     return (user.auto_farm_level + 1) * 500
 
 
-def build_keyboard(user: User) -> ReplyKeyboardMarkup:
+def build_keyboard(user: User) -> InlineKeyboardMarkup:
     tap_cost = get_tap_upgrade_cost(user)
     regen_cost = get_regen_upgrade_cost(user)
     auto_farm_cost = get_auto_farm_upgrade_cost(user)
 
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="👇 Тап")],
-            [KeyboardButton(text=f"⚡ Улучшить тап • {tap_cost}💰")],
-            [KeyboardButton(text=f"🚀 Улучшить реген • {regen_cost}💰")],
-            [KeyboardButton(text="💵 Купить энергию • 200💰")],
-            [KeyboardButton(text=f"🤖 Авто-фарм • {auto_farm_cost}💰")],
-            [KeyboardButton(text="🏆 Рейтинг")],
-            [KeyboardButton(text="📊 Профиль")],
-        ],
-        resize_keyboard=True,
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="👇 Тап", callback_data="tap")],
+            [InlineKeyboardButton(text=f"⚡ Улучшить тап • {tap_cost}💰", callback_data="upgrade_tap")],
+            [InlineKeyboardButton(text=f"🚀 Улучшить реген • {regen_cost}💰", callback_data="upgrade_regen")],
+            [InlineKeyboardButton(text="💵 Купить энергию • 200💰", callback_data="buy_energy")],
+            [InlineKeyboardButton(text=f"🤖 Авто-фарм • {auto_farm_cost}💰", callback_data="auto_farm")],
+            [InlineKeyboardButton(text="🏆 Рейтинг", callback_data="rating_menu")],
+            [InlineKeyboardButton(text="📊 Профиль", callback_data="show_profile")],
+        ]
     )
 
 
-
-
-def build_rating_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="💰 Топ по балансу")],
-            [KeyboardButton(text="🤖 Топ по авто-фарму")],
-            [KeyboardButton(text="🚀 Топ по регену")],
-            [KeyboardButton(text="⬅️ Назад")],
-        ],
-        resize_keyboard=True,
+def build_rating_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💰 Топ по балансу", callback_data="top_balance")],
+            [InlineKeyboardButton(text="🤖 Топ по авто-фарму", callback_data="top_auto_farm")],
+            [InlineKeyboardButton(text="🚀 Топ по регену", callback_data="top_regen")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main")],
+        ]
     )
+
 
 async def send_with_fresh_keyboard(message: Message, text: str, user: User) -> Message:
     # Принудительно сбрасываем старую клавиатуру, чтобы Telegram-клиент точно принял новую разметку
@@ -125,6 +130,7 @@ async def upsert_status_message(message: Message, user: User, prefix: str | None
                 chat_id=message.chat.id,
                 message_id=cached_message_id,
                 text=text,
+                reply_markup=build_keyboard(user),
             )
             return
         except Exception:
@@ -405,6 +411,204 @@ async def profile(message: Message):
             f"🤖 Авто-фарм: {user.auto_farm_level}/сек",
             user,
         )
+
+
+@dp.callback_query(F.data == "tap")
+async def tap_callback(callback: CallbackQuery):
+    if not callback.message:
+        return
+    msg = callback.message
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).where(User.user_id == callback.from_user.id))
+        user = result.scalar_one()
+
+        await update_energy(user)
+        await update_auto_farm(user)
+
+        if user.energy < user.tap_power:
+            await upsert_status_message(msg, user, prefix="❌ Нет энергии!")
+            await callback.answer("Нет энергии")
+            return
+
+        user.energy -= user.tap_power
+        user.balance += user.tap_power
+        await session.commit()
+
+        await upsert_status_message(msg, user)
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "upgrade_tap")
+async def upgrade_tap_callback(callback: CallbackQuery):
+    if not callback.message:
+        return
+    msg = callback.message
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).where(User.user_id == callback.from_user.id))
+        user = result.scalar_one()
+        cost = get_tap_upgrade_cost(user)
+
+        if user.balance < cost:
+            await upsert_status_message(msg, user, prefix="❌ Недостаточно денег!")
+            await callback.answer("Недостаточно денег")
+            return
+
+        user.balance -= cost
+        user.tap_power += 1
+        await session.commit()
+        await upsert_status_message(msg, user, prefix=f"⚡ Tap power теперь: {user.tap_power}")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "upgrade_regen")
+async def upgrade_regen_callback(callback: CallbackQuery):
+    if not callback.message:
+        return
+    msg = callback.message
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).where(User.user_id == callback.from_user.id))
+        user = result.scalar_one()
+        cost = get_regen_upgrade_cost(user)
+
+        if user.balance < cost:
+            await upsert_status_message(msg, user, prefix="❌ Недостаточно денег!")
+            await callback.answer("Недостаточно денег")
+            return
+
+        user.balance -= cost
+        user.energy_regen += 0.5
+        await session.commit()
+        await upsert_status_message(msg, user, prefix=f"🚀 Реген теперь: {user.energy_regen}/сек")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "buy_energy")
+async def buy_energy_callback(callback: CallbackQuery):
+    if not callback.message:
+        return
+    msg = callback.message
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).where(User.user_id == callback.from_user.id))
+        user = result.scalar_one()
+
+        if user.balance < 200:
+            await upsert_status_message(msg, user, prefix="❌ Недостаточно денег!")
+            await callback.answer("Недостаточно денег")
+            return
+
+        user.balance -= 200
+        user.energy = user.max_energy
+        await session.commit()
+        await upsert_status_message(msg, user, prefix="⚡ Энергия восстановлена!")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "auto_farm")
+async def auto_farm_callback(callback: CallbackQuery):
+    if not callback.message:
+        return
+    msg = callback.message
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).where(User.user_id == callback.from_user.id))
+        user = result.scalar_one()
+
+        cost = get_auto_farm_upgrade_cost(user)
+        if user.balance < cost:
+            await upsert_status_message(msg, user, prefix=f"❌ Нужно {cost} монет")
+            await callback.answer("Недостаточно денег")
+            return
+
+        user.balance -= cost
+        user.auto_farm_level += 1
+        user.auto_farm_enabled = True
+        await session.commit()
+        await upsert_status_message(
+            msg,
+            user,
+            prefix=(
+                f"🤖 Авто-фарм уровень: {user.auto_farm_level}\n"
+                f"Фармит {user.auto_farm_level} монет/сек"
+            ),
+        )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "show_profile")
+async def profile_callback(callback: CallbackQuery):
+    if not callback.message:
+        return
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).where(User.user_id == callback.from_user.id))
+        user = result.scalar_one()
+
+        await update_energy(user)
+        await update_auto_farm(user)
+        await session.commit()
+
+        await callback.message.answer(
+            f"📊 Профиль\n\n"
+            f"💰 Баланс: {user.balance}\n"
+            f"⚡ Энергия: {int(user.energy)}\n"
+            f"⚡ Tap power: {user.tap_power}\n"
+            f"🚀 Реген: {user.energy_regen}/сек\n"
+            f"🤖 Авто-фарм: {user.auto_farm_level}/сек",
+            reply_markup=build_keyboard(user),
+        )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "rating_menu")
+async def rating_menu_callback(callback: CallbackQuery):
+    if callback.message:
+        await callback.message.answer("🏆 Рейтинг\nВыбери категорию топ-5:", reply_markup=build_rating_keyboard())
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "back_main")
+async def back_main_callback(callback: CallbackQuery):
+    if not callback.message:
+        return
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).where(User.user_id == callback.from_user.id))
+        user = result.scalar_one()
+        await callback.message.answer("↩️ Вернул в главное меню", reply_markup=build_keyboard(user))
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "top_balance")
+async def top_balance_callback(callback: CallbackQuery):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).order_by(desc(User.balance)).limit(5))
+        users = result.scalars().all()
+
+    lines = await format_top_lines(users, lambda u: f"{u.balance} 💰")
+    if callback.message:
+        await callback.message.answer(f"💰 <b>Топ-5 по балансу</b>\n\n{lines}", reply_markup=build_rating_keyboard())
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "top_auto_farm")
+async def top_auto_farm_callback(callback: CallbackQuery):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).order_by(desc(User.auto_farm_level)).limit(5))
+        users = result.scalars().all()
+
+    lines = await format_top_lines(users, lambda u: f"{u.auto_farm_level}/сек")
+    if callback.message:
+        await callback.message.answer(f"🤖 <b>Топ-5 по авто-фарму</b>\n\n{lines}", reply_markup=build_rating_keyboard())
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "top_regen")
+async def top_regen_callback(callback: CallbackQuery):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).order_by(desc(User.energy_regen)).limit(5))
+        users = result.scalars().all()
+
+    lines = await format_top_lines(users, lambda u: f"{u.energy_regen}/сек")
+    if callback.message:
+        await callback.message.answer(f"🚀 <b>Топ-5 по регену</b>\n\n{lines}", reply_markup=build_rating_keyboard())
+    await callback.answer()
 
 
 @dp.message(Command("version"))

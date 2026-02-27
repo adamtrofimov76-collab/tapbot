@@ -136,6 +136,13 @@ async def upsert_status_message(message: Message, user: User, prefix: str | None
     last_status_message_ids[user.user_id] = sent.message_id
 
 
+async def hide_user_button_message(message: Message):
+    # В приватных чатах удаляем сообщение с текстом нажатой кнопки,
+    # чтобы чат не засорялся отправленными названиями кнопок.
+    try:
+        await bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
+    except Exception:
+        pass
 
 
 # -------- START --------
@@ -170,6 +177,8 @@ async def start_handler(message: Message):
 # -------- ТАП --------
 @dp.message(F.text == "👇 Тап")
 async def tap_handler(message: Message):
+    await hide_user_button_message(message)
+
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(User).where(User.user_id == message.from_user.id)
@@ -194,6 +203,8 @@ async def tap_handler(message: Message):
 # -------- УЛУЧШЕНИЯ --------
 @dp.message(F.text.startswith("⚡ Улучшить тап") | F.text.startswith("⚡ Тап +1"))
 async def upgrade_tap(message: Message):
+    await hide_user_button_message(message)
+
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(User).where(User.user_id == message.from_user.id)
@@ -215,6 +226,8 @@ async def upgrade_tap(message: Message):
 
 @dp.message(F.text.startswith("🚀 Улучшить реген") | F.text.startswith("🚀 Реген +0.5"))
 async def upgrade_regen(message: Message):
+    await hide_user_button_message(message)
+
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(User).where(User.user_id == message.from_user.id)
@@ -236,6 +249,8 @@ async def upgrade_regen(message: Message):
 
 @dp.message(F.text.startswith("💵 Купить энергию") | F.text.startswith("💵 Энергия"))
 async def buy_energy(message: Message):
+    await hide_user_button_message(message)
+
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(User).where(User.user_id == message.from_user.id)
@@ -257,6 +272,8 @@ async def buy_energy(message: Message):
 
 @dp.message(F.text.startswith("🤖 Авто-фарм") | F.text.startswith("🤖 Авто-фарм +1"))
 async def auto_farm(message: Message):
+    await hide_user_button_message(message)
+
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(User).where(User.user_id == message.from_user.id)

@@ -4,12 +4,32 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Ферма WebApp</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     body { font-family: Arial, sans-serif; background:#111; color:#fff; max-width:680px; margin:0 auto; padding:16px; }
     .card { background:#1b1b1b; border-radius:12px; padding:12px; margin-bottom:12px; }
     button { width:100%; padding:12px; margin:6px 0; border:none; border-radius:10px; background:#2f80ed; color:#fff; font-size:16px; }
     .small { font-size:14px; opacity:0.85 }
     .top-item { padding:6px 0; border-bottom:1px solid #333; }
+    .tap-zone {
+      user-select:none;
+      -webkit-user-select:none;
+      touch-action:manipulation;
+      width:100%;
+      min-height:170px;
+      border-radius:14px;
+      border:2px dashed #4a4a4a;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      text-align:center;
+      font-size:26px;
+      font-weight:bold;
+      background:#222;
+      margin-bottom:8px;
+      cursor:pointer;
+    }
+    .tap-zone:active { transform: scale(0.99); background:#2a2a2a; }
   </style>
 </head>
 <body>
@@ -26,7 +46,9 @@
   </div>
 
   <div class="card">
-    <button id="tapBtn" onclick="doAction('/api/tap')">👇 Тап</button>
+    <div id="tapZone" class="tap-zone">👇 ТАПАЙ ЗДЕСЬ 👇</div>
+    <div class="small" id="tapInfo">Тапов в этой сессии: 0</div>
+
     <button id="upTapBtn" onclick="doAction('/api/upgrade/tap')">⚡ Улучшить тап</button>
     <button id="upRegenBtn" onclick="doAction('/api/upgrade/regen')">🚀 Улучшить реген</button>
     <button id="buyEnergyBtn" onclick="doAction('/api/buy-energy')">💵 Купить энергию</button>
@@ -42,6 +64,8 @@
 
 <script>
   let userId = null;
+  let tapCount = 0;
+  let tapInFlight = false;
 
   function body() { return { user_id: Number(userId) }; }
 
@@ -53,6 +77,19 @@
     document.getElementById('upRegenBtn').innerText = `🚀 Улучшить реген • ${data.costs.regen_upgrade}💰`;
     document.getElementById('autoFarmBtn').innerText = `🤖 Авто-фарм • ${data.costs.auto_farm_upgrade}💰`;
     document.getElementById('buyEnergyBtn').innerText = `💵 Купить энергию • ${data.costs.buy_energy}💰`;
+  }
+
+  function setupTelegramWebAppUser() {
+    if (!window.Telegram || !window.Telegram.WebApp) return;
+    const tg = window.Telegram.WebApp;
+    tg.expand();
+
+    const tgUserId = tg?.initDataUnsafe?.user?.id;
+    if (tgUserId) {
+      document.getElementById('uid').value = String(tgUserId);
+      userId = String(tgUserId);
+      loadProfile();
+    }
   }
 
   async function loadProfile() {
@@ -72,6 +109,18 @@
     render(data);
   }
 
+  async function doTap() {
+    if (tapInFlight) return;
+    tapInFlight = true;
+    try {
+      await doAction('/api/tap');
+      tapCount += 1;
+      document.getElementById('tapInfo').innerText = `Тапов в этой сессии: ${tapCount}`;
+    } finally {
+      tapInFlight = false;
+    }
+  }
+
   async function loadTop(kind) {
     const r = await fetch('/api/top/' + kind);
     const data = await r.json();
@@ -80,6 +129,15 @@
       `<div class='top-item'>${i+1}. user_id=${x.user_id} | 💰 ${x.balance} | 🤖 ${x.auto_farm_level} | 🚀 ${x.energy_regen}</div>`
     ).join('');
   }
+
+  const tapZone = document.getElementById('tapZone');
+  tapZone.addEventListener('click', doTap);
+  tapZone.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    doTap();
+  }, { passive: false });
+
+  setupTelegramWebAppUser();
 </script>
 </body>
 </html>

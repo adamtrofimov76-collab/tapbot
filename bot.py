@@ -98,9 +98,13 @@ async def start_handler(message: Message):
             session.add(user)
             await session.commit()
 
+        tg_name = message.from_user.first_name or message.from_user.username or "фермер"
+
         await send_with_fresh_keyboard(
             message,
-            f"🔥 Добро пожаловать!\n\n"
+            f"👋 Привет, {tg_name}!\n"
+            f"Ты попал на ферму, тут тебе надо усердно кликать и прокачивать свой огород.\n"
+            f"Стань самым богатым фермером в нашей игре!\n\n"
             f"💰 Баланс: {user.balance}\n"
             f"⚡ Энергия: {int(user.energy)}\n"
             f"🧩 Версия: {APP_VERSION}",

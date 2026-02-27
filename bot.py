@@ -6,7 +6,6 @@ from aiogram.types import (
     Message,
     ReplyKeyboardMarkup,
     KeyboardButton,
-    ReplyKeyboardRemove,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     CallbackQuery,
@@ -78,10 +77,6 @@ def build_rating_keyboard() -> InlineKeyboardMarkup:
 
 
 async def send_with_fresh_keyboard(message: Message, text: str, user: User) -> Message:
-    # Принудительно сбрасываем старую клавиатуру, чтобы Telegram-клиент точно принял новую разметку
-    await message.answer("🔄 Обновляю клавиатуру...", reply_markup=ReplyKeyboardRemove())
-    # Reply keyboard можно отправить только новым сообщением,
-    # поэтому это fallback, если редактирование старого сообщения недоступно.
     sent = await message.answer(text, reply_markup=build_keyboard(user))
     return sent
 
@@ -545,7 +540,7 @@ async def profile_callback(callback: CallbackQuery):
         await update_auto_farm(user)
         await session.commit()
 
-        await callback.message.answer(
+        await callback.message.edit_text(
             f"📊 Профиль\n\n"
             f"💰 Баланс: {user.balance}\n"
             f"⚡ Энергия: {int(user.energy)}\n"
@@ -560,7 +555,7 @@ async def profile_callback(callback: CallbackQuery):
 @dp.callback_query(F.data == "rating_menu")
 async def rating_menu_callback(callback: CallbackQuery):
     if callback.message:
-        await callback.message.answer("🏆 Рейтинг\nВыбери категорию топ-5:", reply_markup=build_rating_keyboard())
+        await callback.message.edit_text("🏆 Рейтинг\nВыбери категорию топ-5:", reply_markup=build_rating_keyboard())
     await callback.answer()
 
 
@@ -571,7 +566,7 @@ async def back_main_callback(callback: CallbackQuery):
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(User).where(User.user_id == callback.from_user.id))
         user = result.scalar_one()
-        await callback.message.answer("↩️ Вернул в главное меню", reply_markup=build_keyboard(user))
+        await callback.message.edit_text("↩️ Вернул в главное меню", reply_markup=build_keyboard(user))
     await callback.answer()
 
 
@@ -583,7 +578,7 @@ async def top_balance_callback(callback: CallbackQuery):
 
     lines = await format_top_lines(users, lambda u: f"{u.balance} 💰")
     if callback.message:
-        await callback.message.answer(f"💰 <b>Топ-5 по балансу</b>\n\n{lines}", reply_markup=build_rating_keyboard())
+        await callback.message.edit_text(f"💰 <b>Топ-5 по балансу</b>\n\n{lines}", reply_markup=build_rating_keyboard())
     await callback.answer()
 
 
@@ -595,7 +590,7 @@ async def top_auto_farm_callback(callback: CallbackQuery):
 
     lines = await format_top_lines(users, lambda u: f"{u.auto_farm_level}/сек")
     if callback.message:
-        await callback.message.answer(f"🤖 <b>Топ-5 по авто-фарму</b>\n\n{lines}", reply_markup=build_rating_keyboard())
+        await callback.message.edit_text(f"🤖 <b>Топ-5 по авто-фарму</b>\n\n{lines}", reply_markup=build_rating_keyboard())
     await callback.answer()
 
 
@@ -607,7 +602,7 @@ async def top_regen_callback(callback: CallbackQuery):
 
     lines = await format_top_lines(users, lambda u: f"{u.energy_regen}/сек")
     if callback.message:
-        await callback.message.answer(f"🚀 <b>Топ-5 по регену</b>\n\n{lines}", reply_markup=build_rating_keyboard())
+        await callback.message.edit_text(f"🚀 <b>Топ-5 по регену</b>\n\n{lines}", reply_markup=build_rating_keyboard())
     await callback.answer()
 
 

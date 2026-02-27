@@ -75,6 +75,8 @@ def build_rating_keyboard() -> ReplyKeyboardMarkup:
 async def send_with_fresh_keyboard(message: Message, text: str, user: User) -> Message:
     # Принудительно сбрасываем старую клавиатуру, чтобы Telegram-клиент точно принял новую разметку
     await message.answer("🔄 Обновляю клавиатуру...", reply_markup=ReplyKeyboardRemove())
+    # Reply keyboard можно отправить только новым сообщением,
+    # поэтому это fallback, если редактирование старого сообщения недоступно.
     sent = await message.answer(text, reply_markup=build_keyboard(user))
     return sent
 
@@ -123,12 +125,13 @@ async def upsert_status_message(message: Message, user: User, prefix: str | None
                 chat_id=message.chat.id,
                 message_id=cached_message_id,
                 text=text,
-                reply_markup=build_keyboard(user),
             )
             return
         except Exception:
             pass
 
+    # Reply keyboard можно отправить только новым сообщением,
+    # поэтому это fallback, если редактирование старого сообщения недоступно.
     sent = await message.answer(text, reply_markup=build_keyboard(user))
     last_status_message_ids[user.user_id] = sent.message_id
 

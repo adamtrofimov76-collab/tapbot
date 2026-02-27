@@ -4,10 +4,9 @@ from datetime import datetime
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
     Message,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    ReplyKeyboardRemove,
     CallbackQuery,
 )
 from aiogram.filters import Command
@@ -53,17 +52,20 @@ def build_keyboard(user: User) -> InlineKeyboardMarkup:
     regen_cost = get_regen_upgrade_cost(user)
     auto_farm_cost = get_auto_farm_upgrade_cost(user)
 
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="👇 Тап", callback_data="tap")],
-            [InlineKeyboardButton(text=f"⚡ Улучшить тап • {tap_cost}💰", callback_data="upgrade_tap")],
-            [InlineKeyboardButton(text=f"🚀 Улучшить реген • {regen_cost}💰", callback_data="upgrade_regen")],
-            [InlineKeyboardButton(text="💵 Купить энергию • 200💰", callback_data="buy_energy")],
-            [InlineKeyboardButton(text=f"🤖 Авто-фарм • {auto_farm_cost}💰", callback_data="auto_farm")],
-            [InlineKeyboardButton(text="🏆 Рейтинг", callback_data="rating_menu")],
-            [InlineKeyboardButton(text="📊 Профиль", callback_data="show_profile")],
-        ]
-    )
+    rows = [
+        [InlineKeyboardButton(text="👇 Тап", callback_data="tap")],
+        [InlineKeyboardButton(text=f"⚡ Улучшить тап • {tap_cost}💰", callback_data="upgrade_tap")],
+        [InlineKeyboardButton(text=f"🚀 Улучшить реген • {regen_cost}💰", callback_data="upgrade_regen")],
+        [InlineKeyboardButton(text="💵 Купить энергию • 200💰", callback_data="buy_energy")],
+        [InlineKeyboardButton(text=f"🤖 Авто-фарм • {auto_farm_cost}💰", callback_data="auto_farm")],
+        [InlineKeyboardButton(text="🏆 Рейтинг", callback_data="rating_menu")],
+        [InlineKeyboardButton(text="📊 Профиль", callback_data="show_profile")],
+    ]
+
+    if WEB_APP_URL:
+        rows.append([InlineKeyboardButton(text="🌐 Открыть веб-ферму", url=WEB_APP_URL)])
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 
@@ -85,6 +87,15 @@ def build_rating_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main")],
         ]
     )
+
+
+async def clear_legacy_reply_keyboard(message: Message):
+    # Если у пользователя осталась старая ReplyKeyboard, снимаем её один раз.
+    try:
+        tmp = await message.answer("♻️", reply_markup=ReplyKeyboardRemove())
+        await bot.delete_message(chat_id=tmp.chat.id, message_id=tmp.message_id)
+    except Exception:
+        pass
 
 
 async def send_with_fresh_keyboard(message: Message, text: str, user: User) -> Message:
@@ -173,6 +184,8 @@ async def start_handler(message: Message):
 
         tg_name = message.from_user.first_name or message.from_user.username or "фермер"
 
+        await clear_legacy_reply_keyboard(message)
+
         sent = await send_with_fresh_keyboard(
             message,
             f"👋 Привет, {tg_name}!\n"
@@ -184,6 +197,10 @@ async def start_handler(message: Message):
             user,
         )
         last_status_message_ids[user.user_id] = sent.message_id
+
+        web_btn = build_web_app_button()
+        if web_btn:
+            await message.answer("🌐 Открыть веб-версию:", reply_markup=web_btn)
 
 
 # -------- ТАП --------
@@ -312,22 +329,6 @@ async def auto_farm(message: Message):
                 f"Фармит {user.auto_farm_level} монет/сек"
             ),
         )
-
-
-@dp.message(F.text == "🏆 Рейтинг")
-async def rating_menu(message: Message):
-    await message.answer("🏆 Рейтинг\nВыбери категорию топ-5:", reply_markup=build_rating_keyboard())
-
-
-@dp.message(F.text == "⬅️ Назад")
-async def rating_back(message: Message):
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(User).where(User.user_id == message.from_user.id)
-        )
-        user = result.scalar_one()
-
-        await message.answer("↩️ Вернул в главное меню", reply_markup=build_keyboard(user))
 
 
 async def format_top_lines(users: list[User], value_getter) -> str:
@@ -615,6 +616,18 @@ async def top_regen_callback(callback: CallbackQuery):
     if callback.message:
         await callback.message.edit_text(f"🚀 <b>Топ-5 по регену</b>\n\n{lines}", reply_markup=build_rating_keyboard())
     await callback.answer()
+
+
+@dp.message(Command("web"))
+@dp.message(F.text.regexp(r"^/web(@[A-Za-z0-9_]+)?$"))
+@dp.message(F.text.in_(["web", "Web", "веб", "Веб"]))
+async def web_handler(message: Message):
+    web_btn = build_web_app_button()
+    if not web_btn:
+        await message.answer("❌ WEB_APP_URL не задан в переменных окружения")
+        return
+
+    await message.answer("🌐 Нажми кнопку ниже, чтобы открыть веб-ферму", reply_markup=web_btn)
 
 
 @dp.message(Command("version"))

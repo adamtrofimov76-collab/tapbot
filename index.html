@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Ферма WebApp</title>
+  <style>
+    body { font-family: Arial, sans-serif; background:#111; color:#fff; max-width:680px; margin:0 auto; padding:16px; }
+    .card { background:#1b1b1b; border-radius:12px; padding:12px; margin-bottom:12px; }
+    button { width:100%; padding:12px; margin:6px 0; border:none; border-radius:10px; background:#2f80ed; color:#fff; font-size:16px; }
+    .small { font-size:14px; opacity:0.85 }
+    .top-item { padding:6px 0; border-bottom:1px solid #333; }
+  </style>
+</head>
+<body>
+  <h2>🌾 Ферма — Web</h2>
+  <div class="card">
+    <label>Ваш Telegram user_id</label>
+    <input id="uid" style="width:100%;padding:8px;border-radius:8px;border:1px solid #555;background:#222;color:#fff" />
+    <button onclick="loadProfile()">Подключиться</button>
+  </div>
+
+  <div class="card">
+    <div id="status">Нажми "Подключиться"</div>
+    <div class="small" id="msg"></div>
+  </div>
+
+  <div class="card">
+    <button id="tapBtn" onclick="doAction('/api/tap')">👇 Тап</button>
+    <button id="upTapBtn" onclick="doAction('/api/upgrade/tap')">⚡ Улучшить тап</button>
+    <button id="upRegenBtn" onclick="doAction('/api/upgrade/regen')">🚀 Улучшить реген</button>
+    <button id="buyEnergyBtn" onclick="doAction('/api/buy-energy')">💵 Купить энергию</button>
+    <button id="autoFarmBtn" onclick="doAction('/api/upgrade/auto-farm')">🤖 Авто-фарм</button>
+  </div>
+
+  <div class="card">
+    <button onclick="loadTop('balance')">💰 Топ баланс</button>
+    <button onclick="loadTop('auto-farm')">🤖 Топ авто-фарм</button>
+    <button onclick="loadTop('regen')">🚀 Топ реген</button>
+    <div id="top"></div>
+  </div>
+
+<script>
+  let userId = null;
+
+  function body() { return { user_id: Number(userId) }; }
+
+  function render(data) {
+    document.getElementById('status').innerText =
+      `💰 Баланс: ${data.balance}\n⚡ Энергия: ${data.energy}\n⚡ Tap: ${data.tap_power}\n🚀 Реген: ${data.energy_regen}/сек\n🤖 Авто-фарм: ${data.auto_farm_level}/сек`;
+    document.getElementById('msg').innerText = data.message;
+    document.getElementById('upTapBtn').innerText = `⚡ Улучшить тап • ${data.costs.tap_upgrade}💰`;
+    document.getElementById('upRegenBtn').innerText = `🚀 Улучшить реген • ${data.costs.regen_upgrade}💰`;
+    document.getElementById('autoFarmBtn').innerText = `🤖 Авто-фарм • ${data.costs.auto_farm_upgrade}💰`;
+    document.getElementById('buyEnergyBtn').innerText = `💵 Купить энергию • ${data.costs.buy_energy}💰`;
+  }
+
+  async function loadProfile() {
+    userId = document.getElementById('uid').value.trim();
+    if (!userId) return alert('Введите user_id');
+    const r = await fetch('/api/profile', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body()) });
+    const data = await r.json();
+    if (!r.ok) return alert(data.detail || 'Ошибка');
+    render(data);
+  }
+
+  async function doAction(url) {
+    if (!userId) return alert('Сначала подключись');
+    const r = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body()) });
+    const data = await r.json();
+    if (!r.ok) return alert(data.detail || 'Ошибка');
+    render(data);
+  }
+
+  async function loadTop(kind) {
+    const r = await fetch('/api/top/' + kind);
+    const data = await r.json();
+    const top = document.getElementById('top');
+    top.innerHTML = `<h4>Топ-5: ${kind}</h4>` + data.items.map((x,i)=>
+      `<div class='top-item'>${i+1}. user_id=${x.user_id} | 💰 ${x.balance} | 🤖 ${x.auto_farm_level} | 🚀 ${x.energy_regen}</div>`
+    ).join('');
+  }
+</script>
+</body>
+</html>

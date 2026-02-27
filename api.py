@@ -2,7 +2,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import desc, select
@@ -14,7 +14,10 @@ app = FastAPI(title="TapBot Web API")
 
 
 STATIC_DIR = Path(__file__).parent / "static"
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+HAS_STATIC = STATIC_DIR.exists()
+
+if HAS_STATIC:
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 class UserPayload(BaseModel):
@@ -87,7 +90,16 @@ async def get_or_create_user(user_id: int) -> User:
 
 @app.get("/")
 async def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    if HAS_STATIC:
+        return FileResponse(STATIC_DIR / "index.html")
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "message": "Web static files are not bundled in this deploy.",
+            "hint": "Set Railway Root Directory to repository root so /static is included.",
+        }
+    )
 
 
 @app.post("/api/profile", response_model=ActionResponse)

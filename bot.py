@@ -200,17 +200,14 @@ async def upgrade_tap(message: Message):
         cost = get_tap_upgrade_cost(user)
 
         if user.balance < cost:
-            await message.answer("❌ Недостаточно денег!", reply_markup=build_keyboard(user))
+            await upsert_status_message(message, user, prefix="❌ Недостаточно денег!")
             return
 
         user.balance -= cost
         user.tap_power += 1
         await session.commit()
 
-        await message.answer(
-            f"⚡ Tap power теперь: {user.tap_power}",
-            reply_markup=build_keyboard(user),
-        )
+        await upsert_status_message(message, user, prefix=f"⚡ Tap power теперь: {user.tap_power}")
 
 
 @dp.message(F.text.startswith("🚀 Улучшить реген") | F.text.startswith("🚀 Реген +0.5"))
@@ -224,17 +221,14 @@ async def upgrade_regen(message: Message):
         cost = get_regen_upgrade_cost(user)
 
         if user.balance < cost:
-            await message.answer("❌ Недостаточно денег!", reply_markup=build_keyboard(user))
+            await upsert_status_message(message, user, prefix="❌ Недостаточно денег!")
             return
 
         user.balance -= cost
         user.energy_regen += 0.5
         await session.commit()
 
-        await message.answer(
-            f"🚀 Реген теперь: {user.energy_regen}/сек",
-            reply_markup=build_keyboard(user),
-        )
+        await upsert_status_message(message, user, prefix=f"🚀 Реген теперь: {user.energy_regen}/сек")
 
 
 @dp.message(F.text.startswith("💵 Купить энергию") | F.text.startswith("💵 Энергия"))
@@ -248,14 +242,14 @@ async def buy_energy(message: Message):
         cost = 200
 
         if user.balance < cost:
-            await message.answer("❌ Недостаточно денег!", reply_markup=build_keyboard(user))
+            await upsert_status_message(message, user, prefix="❌ Недостаточно денег!")
             return
 
         user.balance -= cost
         user.energy = user.max_energy
         await session.commit()
 
-        await message.answer("⚡ Энергия восстановлена!", reply_markup=build_keyboard(user))
+        await upsert_status_message(message, user, prefix="⚡ Энергия восстановлена!")
 
 
 @dp.message(F.text.startswith("🤖 Авто-фарм") | F.text.startswith("🤖 Авто-фарм +1"))
@@ -269,7 +263,7 @@ async def auto_farm(message: Message):
         cost = get_auto_farm_upgrade_cost(user)
 
         if user.balance < cost:
-            await message.answer(f"❌ Нужно {cost} монет", reply_markup=build_keyboard(user))
+            await upsert_status_message(message, user, prefix=f"❌ Нужно {cost} монет")
             return
 
         user.balance -= cost
@@ -278,10 +272,13 @@ async def auto_farm(message: Message):
 
         await session.commit()
 
-        await message.answer(
-            f"🤖 Авто-фарм уровень: {user.auto_farm_level}\n"
-            f"Фармит {user.auto_farm_level} монет/сек",
-            reply_markup=build_keyboard(user),
+        await upsert_status_message(
+            message,
+            user,
+            prefix=(
+                f"🤖 Авто-фарм уровень: {user.auto_farm_level}\n"
+                f"Фармит {user.auto_farm_level} монет/сек"
+            ),
         )
 
 
@@ -301,11 +298,23 @@ async def rating_back(message: Message):
         await message.answer("↩️ Вернул в главное меню", reply_markup=build_keyboard(user))
 
 
-def format_top_lines(users: list[User], value_getter) -> str:
+async def format_top_lines(users: list[User], value_getter) -> str:
     medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
     lines: list[str] = []
+
     for i, u in enumerate(users):
-        lines.append(f"{medals[i]} ID <code>{u.user_id}</code> — {value_getter(u)}")
+        user_label = f"id{u.user_id}"
+        try:
+            chat = await bot.get_chat(u.user_id)
+            if chat.username:
+                user_label = f"@{chat.username}"
+            elif chat.first_name:
+                user_label = chat.first_name
+        except Exception:
+            pass
+
+        lines.append(f"{medals[i]} {user_label} — {value_getter(u)}")
+
     return "\n".join(lines) if lines else "Пока нет данных"
 
 
@@ -317,7 +326,7 @@ async def top_balance(message: Message):
         )
         users = result.scalars().all()
 
-        lines = format_top_lines(users, lambda u: f"{u.balance} 💰")
+        lines = await format_top_lines(users, lambda u: f"{u.balance} 💰")
         await message.answer(
             f"💰 <b>Топ-5 по балансу</b>\n\n{lines}",
             reply_markup=build_rating_keyboard(),
@@ -332,7 +341,7 @@ async def top_auto_farm(message: Message):
         )
         users = result.scalars().all()
 
-        lines = format_top_lines(users, lambda u: f"{u.auto_farm_level}/сек")
+        lines = await format_top_lines(users, lambda u: f"{u.auto_farm_level}/сек")
         await message.answer(
             f"🤖 <b>Топ-5 по авто-фарму</b>\n\n{lines}",
             reply_markup=build_rating_keyboard(),
@@ -347,7 +356,7 @@ async def top_regen(message: Message):
         )
         users = result.scalars().all()
 
-        lines = format_top_lines(users, lambda u: f"{u.energy_regen}/сек")
+        lines = await format_top_lines(users, lambda u: f"{u.energy_regen}/сек")
         await message.answer(
             f"🚀 <b>Топ-5 по регену</b>\n\n{lines}",
             reply_markup=build_rating_keyboard(),

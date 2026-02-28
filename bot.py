@@ -47,6 +47,7 @@ upgrades_keyboard = ReplyKeyboardMarkup(
         [KeyboardButton(text="⚡ Улучшить тап")],
         [KeyboardButton(text="🚀 Улучшить реген")],
         [KeyboardButton(text="💵 Купить энергию")],
+        [KeyboardButton(text="🔋 Увеличить макс. энергию")],
         [KeyboardButton(text="🤖 Авто-фарм")],
         [KeyboardButton(text="⬅️ Назад")],
     ],
@@ -487,6 +488,31 @@ async def buy_energy(message: Message):
         await session.commit()
 
         await message.answer("⚡ Энергия восстановлена!")
+
+
+@dp.message(F.text == "🔋 Увеличить макс. энергию")
+async def upgrade_max_energy(message: Message):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(User).where(User.user_id == message.from_user.id)
+        )
+        user = result.scalar_one()
+
+        cost = user.max_energy * 10
+
+        if user.balance < cost:
+            await message.answer(f"❌ Недостаточно денег! Нужно {cost} монет")
+            return
+
+        user.balance -= cost
+        user.max_energy += 25
+        user.energy = min(user.max_energy, user.energy + 25)
+        await session.commit()
+
+        await message.answer(
+            f"🔋 Макс. энергия теперь: {user.max_energy}\n"
+            f"⚡ Текущая энергия: {int(user.energy)}"
+        )
 
 
 @dp.message(F.text == "🤖 Авто-фарм")

@@ -7,7 +7,7 @@ from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from sqlalchemy import select
+from sqlalchemy import select, desc
 
 import os
 from database import AsyncSessionLocal, User
@@ -27,6 +27,7 @@ main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="👇 Тап")],
         [KeyboardButton(text="🛠 Улучшения")],
+        [KeyboardButton(text="🏆 Рейтинг")],
         [KeyboardButton(text="📊 Профиль")]
     ],
     resize_keyboard=True
@@ -38,6 +39,16 @@ upgrades_keyboard = ReplyKeyboardMarkup(
         [KeyboardButton(text="🚀 Улучшить реген")],
         [KeyboardButton(text="💵 Купить энергию")],
         [KeyboardButton(text="🤖 Авто-фарм")],
+        [KeyboardButton(text="⬅️ Назад")],
+    ],
+    resize_keyboard=True,
+)
+
+rating_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="💰 Топ по балансу")],
+        [KeyboardButton(text="🤖 Топ по авто-фарму")],
+        [KeyboardButton(text="🚀 Топ по регену")],
         [KeyboardButton(text="⬅️ Назад")],
     ],
     resize_keyboard=True,
@@ -102,9 +113,68 @@ async def upgrades_menu(message: Message):
     await message.answer("🛠 Меню улучшений", reply_markup=upgrades_keyboard)
 
 
+@dp.message(F.text == "🏆 Рейтинг")
+async def rating_menu(message: Message):
+    await message.answer("🏆 Выбери рейтинг", reply_markup=rating_keyboard)
+
+
 @dp.message(F.text == "⬅️ Назад")
 async def back_to_main_menu(message: Message):
     await message.answer("⬅️ Главное меню", reply_markup=main_keyboard)
+
+
+async def resolve_player_name(user_id: int) -> str:
+    try:
+        chat = await bot.get_chat(user_id)
+    except Exception:
+        return f"id{user_id}"
+
+    if chat.username:
+        return f"@{chat.username}"
+    if chat.first_name:
+        return chat.first_name
+    return f"id{user_id}"
+
+
+async def format_top(users: list[User], value_getter) -> str:
+    if not users:
+        return "Пока пусто"
+
+    lines = []
+    for i, u in enumerate(users, start=1):
+        name = await resolve_player_name(u.user_id)
+        lines.append(f"{i}. {name} — {value_getter(u)}")
+    return "\n".join(lines)
+
+
+@dp.message(F.text == "💰 Топ по балансу")
+async def top_balance(message: Message):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).order_by(desc(User.balance)).limit(5))
+        users = result.scalars().all()
+
+    top_text = await format_top(users, lambda u: f"{u.balance}💰")
+    await message.answer(f"💰 Топ-5 по балансу\n\n{top_text}", reply_markup=rating_keyboard)
+
+
+@dp.message(F.text == "🤖 Топ по авто-фарму")
+async def top_auto_farm(message: Message):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).order_by(desc(User.auto_farm_level)).limit(5))
+        users = result.scalars().all()
+
+    top_text = await format_top(users, lambda u: f"{u.auto_farm_level}/сек")
+    await message.answer(f"🤖 Топ-5 по авто-фарму\n\n{top_text}", reply_markup=rating_keyboard)
+
+
+@dp.message(F.text == "🚀 Топ по регену")
+async def top_regen(message: Message):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).order_by(desc(User.energy_regen)).limit(5))
+        users = result.scalars().all()
+
+    top_text = await format_top(users, lambda u: f"{u.energy_regen}/сек")
+    await message.answer(f"🚀 Топ-5 по регену\n\n{top_text}", reply_markup=rating_keyboard)
 
 
 # -------- ТАП --------

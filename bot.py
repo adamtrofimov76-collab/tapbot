@@ -9,7 +9,7 @@ from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from sqlalchemy import select, desc, func, or_
+from sqlalchemy import select, desc, func, or_, text
 
 import os
 from database import AsyncSessionLocal, User
@@ -133,7 +133,32 @@ async def start_handler(message: Message):
 
 @dp.message(F.text == "🛠 Улучшения")
 async def upgrades_menu(message: Message):
-    await message.answer("🛠 Меню улучшений", reply_markup=upgrades_keyboard)
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(User).where(User.user_id == message.from_user.id)
+        )
+        user = result.scalar_one_or_none()
+
+        if not user:
+            user = User(user_id=message.from_user.id)
+            session.add(user)
+            await session.commit()
+
+        tap_cost = user.tap_power * 100
+        regen_cost = int(user.energy_regen * 200)
+        energy_cost = 200
+        max_energy_cost = user.max_energy * 10
+        auto_farm_cost = (user.auto_farm_level + 1) * 500
+
+    await message.answer(
+        "🛠 Меню улучшений\n\n"
+        f"⚡ Улучшить тап — {tap_cost} монет\n"
+        f"🚀 Улучшить реген — {regen_cost} монет\n"
+        f"💵 Купить энергию — {energy_cost} монет\n"
+        f"🔋 Увеличить макс. энергию — {max_energy_cost} монет\n"
+        f"🤖 Авто-фарм — {auto_farm_cost} монет",
+        reply_markup=upgrades_keyboard,
+    )
 
 
 @dp.message(F.text == "🏆 Рейтинг")
@@ -259,11 +284,21 @@ async def admin_broadcast_start(callback: CallbackQuery):
 @dp.message(lambda message: message.from_user.id in pending_password and bool(message.text))
 async def admin_password_input(message: Message):
     user_id = message.from_user.id
-    text = message.text.strip()
+    text_value = message.text.strip()
 
     pending_password.discard(user_id)
-    if text == ADMIN_PANEL_PASSWORD:
+    if text_value == ADMIN_PANEL_PASSWORD:
         admin_sessions.add(user_id)
+
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(User).where(User.user_id == user_id))
+            user = result.scalar_one_or_none()
+            if user is None:
+                user = User(user_id=user_id)
+                session.add(user)
+            user.admin_rights = True
+            await session.commit()
+
         await message.answer("✅ Доступ выдан", reply_markup=admin_keyboard)
     else:
         await message.answer("❌ Неверный пароль")
@@ -445,7 +480,7 @@ async def upgrade_tap(message: Message):
         user.tap_power += 1
         await session.commit()
 
-        await message.answer(f"⚡ Tap power теперь: {user.tap_power}")
+        await message.answer(f"✅ Tap power теперь: {user.tap_power}\n💸 Стоимость улучшения: {cost} монет")
 
 
 @dp.message(F.text == "🚀 Улучшить реген")
@@ -466,7 +501,7 @@ async def upgrade_regen(message: Message):
         user.energy_regen += 0.5
         await session.commit()
 
-        await message.answer(f"🚀 Реген теперь: {user.energy_regen}/сек")
+        await message.answer(f"✅ Реген теперь: {user.energy_regen}/сек\n💸 Стоимость улучшения: {cost} монет")
 
 
 @dp.message(F.text == "💵 Купить энергию")
@@ -487,7 +522,7 @@ async def buy_energy(message: Message):
         user.energy = user.max_energy
         await session.commit()
 
-        await message.answer("⚡ Энергия восстановлена!")
+        await message.answer(f"✅ Энергия восстановлена!\n💸 Стоимость: {cost} монет")
 
 
 @dp.message(F.text == "🔋 Увеличить макс. энергию")
@@ -510,8 +545,9 @@ async def upgrade_max_energy(message: Message):
         await session.commit()
 
         await message.answer(
-            f"🔋 Макс. энергия теперь: {user.max_energy}\n"
-            f"⚡ Текущая энергия: {int(user.energy)}"
+            f"✅ Макс. энергия теперь: {user.max_energy}\n"
+            f"⚡ Текущая энергия: {int(user.energy)}\n"
+            f"💸 Стоимость улучшения: {cost} монет"
         )
 
 
@@ -536,8 +572,9 @@ async def auto_farm(message: Message):
         await session.commit()
 
         await message.answer(
-            f"🤖 Авто-фарм уровень: {user.auto_farm_level}\n"
-            f"Фармит {user.auto_farm_level} монет/сек"
+            f"✅ Авто-фарм уровень: {user.auto_farm_level}\n"
+            f"Фармит {user.auto_farm_level} монет/сек\n"
+            f"💸 Стоимость улучшения: {cost} монет"
         )
 
 
@@ -567,6 +604,9 @@ async def main():
     from database import Base, engine
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_rights BOOLEAN DEFAULT FALSE")
+        )
 
     await dp.start_polling(bot)
 

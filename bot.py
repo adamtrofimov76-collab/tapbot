@@ -1,13 +1,15 @@
 import asyncio
 from datetime import datetime
+from datetime import timedelta
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, func, or_
 
 import os
 from database import AsyncSessionLocal, User
@@ -22,6 +24,12 @@ bot = Bot(
 )
 
 dp = Dispatcher()
+
+ADMIN_PANEL_PASSWORD = "adam404"
+admin_sessions: set[int] = set()
+pending_password: set[int] = set()
+pending_grant: dict[int, str] = {}
+pending_broadcast: set[int] = set()
 
 
 main_keyboard = ReplyKeyboardMarkup(
@@ -53,6 +61,19 @@ rating_keyboard = ReplyKeyboardMarkup(
         [KeyboardButton(text="⬅️ Назад")],
     ],
     resize_keyboard=True,
+)
+
+admin_keyboard = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
+        [InlineKeyboardButton(text="💰 Выдать баланс", callback_data="grant_balance")],
+        [InlineKeyboardButton(text="⚡ Выдать tap power", callback_data="grant_tap")],
+        [InlineKeyboardButton(text="🚀 Выдать реген", callback_data="grant_regen")],
+        [InlineKeyboardButton(text="🤖 Выдать авто-фарм", callback_data="grant_autofarm")],
+        [InlineKeyboardButton(text="🔋 Выдать энергию", callback_data="grant_energy")],
+        [InlineKeyboardButton(text="📣 Рассылка", callback_data="admin_broadcast")],
+        [InlineKeyboardButton(text="❌ Закрыть админку", callback_data="admin_close")],
+    ]
 )
 
 
@@ -148,6 +169,193 @@ async def format_top(users: list[User], value_getter) -> str:
         name = await resolve_player_name(u.user_id)
         lines.append(f"{i}. {name} — {value_getter(u)}")
     return "\n".join(lines)
+
+
+async def get_user_by_target(target: str, session) -> User | None:
+    user_id = None
+    cleaned = target.strip()
+
+    if cleaned.isdigit():
+        user_id = int(cleaned)
+    else:
+        if not cleaned.startswith("@"):
+            cleaned = f"@{cleaned}"
+        try:
+            chat = await bot.get_chat(cleaned)
+            user_id = chat.id
+        except Exception:
+            return None
+
+    result = await session.execute(select(User).where(User.user_id == user_id))
+    return result.scalar_one_or_none()
+
+
+@dp.message(Command("paneladmins7623"))
+async def panel_login(message: Message):
+    pending_password.add(message.from_user.id)
+    await message.answer("🔐 Введите пароль от админ-панели:")
+
+
+@dp.callback_query(F.data == "admin_close")
+async def admin_close(callback: CallbackQuery):
+    admin_sessions.discard(callback.from_user.id)
+    pending_grant.pop(callback.from_user.id, None)
+    pending_broadcast.discard(callback.from_user.id)
+    await callback.message.answer("❌ Админка закрыта")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "admin_stats")
+async def admin_stats(callback: CallbackQuery):
+    if callback.from_user.id not in admin_sessions:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    async with AsyncSessionLocal() as session:
+        total_users = await session.scalar(select(func.count()).select_from(User))
+        threshold = datetime.utcnow() - timedelta(minutes=5)
+        online_users = await session.scalar(
+            select(func.count()).select_from(User).where(
+                or_(User.last_energy_update >= threshold, User.last_farm_update >= threshold)
+            )
+        )
+
+    await callback.message.answer(
+        f"📊 Статистика бота\n\n"
+        f"👥 Всего пользователей: {total_users or 0}\n"
+        f"🟢 В сети (последние 5 минут): {online_users or 0}",
+        reply_markup=admin_keyboard,
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("grant_"))
+async def admin_grant_select(callback: CallbackQuery):
+    if callback.from_user.id not in admin_sessions:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    grant_type = callback.data.replace("grant_", "")
+    pending_grant[callback.from_user.id] = grant_type
+    await callback.message.answer(
+        "Введите: выдать <id/@username> <значение>\n"
+        f"Текущий тип выдачи: {grant_type}"
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "admin_broadcast")
+async def admin_broadcast_start(callback: CallbackQuery):
+    if callback.from_user.id not in admin_sessions:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    pending_broadcast.add(callback.from_user.id)
+    await callback.message.answer("✉️ Отправьте текст рассылки одним сообщением")
+    await callback.answer()
+
+
+@dp.message(lambda message: message.from_user.id in pending_password and bool(message.text))
+async def admin_password_input(message: Message):
+    user_id = message.from_user.id
+    text = message.text.strip()
+
+    pending_password.discard(user_id)
+    if text == ADMIN_PANEL_PASSWORD:
+        admin_sessions.add(user_id)
+        await message.answer("✅ Доступ выдан", reply_markup=admin_keyboard)
+    else:
+        await message.answer("❌ Неверный пароль")
+
+
+@dp.message(lambda message: message.from_user.id in pending_broadcast and bool(message.text))
+async def admin_broadcast_message(message: Message):
+    user_id = message.from_user.id
+
+    if user_id not in admin_sessions:
+        pending_broadcast.discard(user_id)
+        await message.answer("❌ Доступ к админке потерян")
+        return
+
+    pending_broadcast.discard(user_id)
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User.user_id))
+        user_ids = result.scalars().all()
+
+    sent = 0
+    failed = 0
+    for uid in user_ids:
+        try:
+            await bot.send_message(uid, f"📣 Сообщение от администрации:\n\n{message.text}")
+            sent += 1
+        except Exception:
+            failed += 1
+
+    await message.answer(
+        f"✅ Рассылка завершена\n"
+        f"Доставлено: {sent}\n"
+        f"Не доставлено: {failed}",
+        reply_markup=admin_keyboard,
+    )
+
+
+@dp.message(lambda message: message.from_user.id in pending_grant and bool(message.text))
+async def admin_grant_input(message: Message):
+    user_id = message.from_user.id
+    text = message.text.strip()
+
+    if user_id not in admin_sessions:
+        pending_grant.pop(user_id, None)
+        await message.answer("❌ Доступ к админке потерян")
+        return
+
+    parts = text.split()
+    if len(parts) != 3 or parts[0].lower() != "выдать":
+        await message.answer("❌ Формат: выдать <id/@username> <значение>")
+        return
+
+    _, target, raw_value = parts
+    try:
+        value = float(raw_value)
+    except ValueError:
+        await message.answer("❌ Значение должно быть числом")
+        return
+
+    grant_type = pending_grant[user_id]
+
+    async with AsyncSessionLocal() as session:
+        target_user = await get_user_by_target(target, session)
+
+        if not target_user:
+            await message.answer("❌ Пользователь не найден в базе")
+            return
+
+        if grant_type == "balance":
+            target_user.balance += int(value)
+            result_text = f"Баланс +{int(value)}"
+        elif grant_type == "tap":
+            target_user.tap_power += int(value)
+            result_text = f"Tap power +{int(value)}"
+        elif grant_type == "regen":
+            target_user.energy_regen += value
+            result_text = f"Реген +{value}"
+        elif grant_type == "autofarm":
+            target_user.auto_farm_level += int(value)
+            if target_user.auto_farm_level > 0:
+                target_user.auto_farm_enabled = True
+            result_text = f"Авто-фарм +{int(value)}"
+        elif grant_type == "energy":
+            target_user.max_energy += int(value)
+            target_user.energy = min(target_user.max_energy, target_user.energy + int(value))
+            result_text = f"Энергия +{int(value)}"
+        else:
+            await message.answer("❌ Неизвестный тип выдачи")
+            return
+
+        await session.commit()
+
+    pending_grant.pop(user_id, None)
+    await message.answer(f"✅ Выдано: {result_text}", reply_markup=admin_keyboard)
 
 
 @dp.message(F.text == "💰 Топ по балансу")

@@ -28,7 +28,7 @@ dp = Dispatcher()
 ADMIN_PANEL_PASSWORD = "adam404"
 admin_sessions: set[int] = set()
 pending_password: set[int] = set()
-pending_grant: dict[int, str] = {}
+pending_grant: dict[int, dict[str, str | None]] = {}
 pending_broadcast: set[int] = set()
 
 
@@ -236,9 +236,9 @@ async def admin_grant_select(callback: CallbackQuery):
         return
 
     grant_type = callback.data.replace("grant_", "")
-    pending_grant[callback.from_user.id] = grant_type
+    pending_grant[callback.from_user.id] = {"type": grant_type, "target": None}
     await callback.message.answer(
-        "Введите: выдать <id/@username> <значение>\n"
+        "Введите ID или @username пользователя для выдачи\n"
         f"Текущий тип выдачи: {grant_type}"
     )
     await callback.answer()
@@ -286,7 +286,7 @@ async def admin_broadcast_message(message: Message):
     failed = 0
     for uid in user_ids:
         try:
-            await bot.send_message(uid, f"📣 Сообщение от администрации:\n\n{message.text}")
+            await bot.send_message(uid, message.text)
             sent += 1
         except Exception:
             failed += 1
@@ -309,19 +309,29 @@ async def admin_grant_input(message: Message):
         await message.answer("❌ Доступ к админке потерян")
         return
 
-    parts = text.split()
-    if len(parts) != 3 or parts[0].lower() != "выдать":
-        await message.answer("❌ Формат: выдать <id/@username> <значение>")
+    grant_data = pending_grant[user_id]
+    grant_type = grant_data["type"]
+
+    if text.lower() == "отмена":
+        pending_grant.pop(user_id, None)
+        await message.answer("❌ Выдача отменена", reply_markup=admin_keyboard)
         return
 
-    _, target, raw_value = parts
+    if grant_data["target"] is None:
+        grant_data["target"] = text
+        await message.answer("Теперь введите значение для выдачи (например: 100)")
+        return
+
+    target = grant_data["target"]
     try:
-        value = float(raw_value)
+        value = float(text)
     except ValueError:
         await message.answer("❌ Значение должно быть числом")
         return
 
-    grant_type = pending_grant[user_id]
+    if value <= 0:
+        await message.answer("❌ Значение должно быть больше 0")
+        return
 
     async with AsyncSessionLocal() as session:
         target_user = await get_user_by_target(target, session)

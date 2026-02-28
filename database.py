@@ -41,6 +41,7 @@ class User(Base):
 
     auto_farm_level: Mapped[int] = mapped_column(Integer, default=0)
     auto_farm_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    admin_rights: Mapped[bool] = mapped_column(Boolean, default=False)
 
     last_energy_update: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow

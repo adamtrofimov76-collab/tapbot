@@ -17,6 +17,7 @@ from database import AsyncSessionLocal, User
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BLOCKED_TOP_USER_ID = 8375181976
+OWNER_ID = 8375181976
 
 bot = Bot(
     token=BOT_TOKEN,
@@ -30,6 +31,7 @@ admin_sessions: set[int] = set()
 pending_password: set[int] = set()
 pending_grant: dict[int, dict[str, str | None]] = {}
 pending_broadcast: set[int] = set()
+admin_action_log: list[str] = []
 
 
 main_keyboard = ReplyKeyboardMarkup(
@@ -76,6 +78,21 @@ admin_keyboard = InlineKeyboardMarkup(
         [InlineKeyboardButton(text="❌ Закрыть админку", callback_data="admin_close")],
     ]
 )
+
+
+def is_admin(user_id: int) -> bool:
+    return user_id == OWNER_ID or user_id in admin_sessions
+
+
+def is_owner(user_id: int) -> bool:
+    return user_id == OWNER_ID
+
+
+def log_admin_action(actor_id: int, action: str):
+    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    admin_action_log.append(f"[{timestamp}] {actor_id}: {action}")
+    if len(admin_action_log) > 200:
+        del admin_action_log[:-200]
 
 
 # -------- ЭНЕРГИЯ --------
@@ -218,7 +235,15 @@ async def get_user_by_target(target: str, session) -> User | None:
 
 @dp.message(Command("paneladmins7623"))
 async def panel_login(message: Message):
-    pending_password.add(message.from_user.id)
+    user_id = message.from_user.id
+
+    if is_owner(user_id):
+        admin_sessions.add(user_id)
+        await message.answer("👑 Владелец вошел в админку", reply_markup=admin_keyboard)
+        log_admin_action(user_id, "owner opened admin panel")
+        return
+
+    pending_password.add(user_id)
     await message.answer("🔐 Введите пароль от админ-панели:")
 
 
@@ -228,12 +253,13 @@ async def admin_close(callback: CallbackQuery):
     pending_grant.pop(callback.from_user.id, None)
     pending_broadcast.discard(callback.from_user.id)
     await callback.message.answer("❌ Админка закрыта")
+    log_admin_action(callback.from_user.id, "closed admin panel")
     await callback.answer()
 
 
 @dp.callback_query(F.data == "admin_stats")
 async def admin_stats(callback: CallbackQuery):
-    if callback.from_user.id not in admin_sessions:
+    if not is_admin(callback.from_user.id):
         await callback.answer("Нет доступа", show_alert=True)
         return
 
@@ -252,12 +278,13 @@ async def admin_stats(callback: CallbackQuery):
         f"🟢 В сети (последние 5 минут): {online_users or 0}",
         reply_markup=admin_keyboard,
     )
+    log_admin_action(callback.from_user.id, "opened stats")
     await callback.answer()
 
 
 @dp.callback_query(F.data.startswith("grant_"))
 async def admin_grant_select(callback: CallbackQuery):
-    if callback.from_user.id not in admin_sessions:
+    if not is_admin(callback.from_user.id):
         await callback.answer("Нет доступа", show_alert=True)
         return
 
@@ -265,19 +292,22 @@ async def admin_grant_select(callback: CallbackQuery):
     pending_grant[callback.from_user.id] = {"type": grant_type, "target": None}
     await callback.message.answer(
         "Введите ID или @username пользователя для выдачи\n"
-        f"Текущий тип выдачи: {grant_type}"
+        f"Текущий тип выдачи: {grant_type}\n"
+        "Для владельца доступно списание: можно ввести отрицательное значение"
     )
+    log_admin_action(callback.from_user.id, f"selected grant type {grant_type}")
     await callback.answer()
 
 
 @dp.callback_query(F.data == "admin_broadcast")
 async def admin_broadcast_start(callback: CallbackQuery):
-    if callback.from_user.id not in admin_sessions:
+    if not is_admin(callback.from_user.id):
         await callback.answer("Нет доступа", show_alert=True)
         return
 
     pending_broadcast.add(callback.from_user.id)
     await callback.message.answer("✉️ Отправьте текст рассылки одним сообщением")
+    log_admin_action(callback.from_user.id, "started broadcast")
     await callback.answer()
 
 
@@ -299,6 +329,7 @@ async def admin_password_input(message: Message):
             user.admin_rights = True
             await session.commit()
 
+        log_admin_action(user_id, "logged into admin panel")
         await message.answer("✅ Доступ выдан", reply_markup=admin_keyboard)
     else:
         await message.answer("❌ Неверный пароль")
@@ -308,7 +339,7 @@ async def admin_password_input(message: Message):
 async def admin_broadcast_message(message: Message):
     user_id = message.from_user.id
 
-    if user_id not in admin_sessions:
+    if not is_admin(user_id):
         pending_broadcast.discard(user_id)
         await message.answer("❌ Доступ к админке потерян")
         return
@@ -327,6 +358,7 @@ async def admin_broadcast_message(message: Message):
         except Exception:
             failed += 1
 
+    log_admin_action(user_id, f"broadcast sent: delivered={sent}, failed={failed}")
     await message.answer(
         f"✅ Рассылка завершена\n"
         f"Доставлено: {sent}\n"
@@ -340,7 +372,7 @@ async def admin_grant_input(message: Message):
     user_id = message.from_user.id
     text = message.text.strip()
 
-    if user_id not in admin_sessions:
+    if not is_admin(user_id):
         pending_grant.pop(user_id, None)
         await message.answer("❌ Доступ к админке потерян")
         return
@@ -365,8 +397,12 @@ async def admin_grant_input(message: Message):
         await message.answer("❌ Значение должно быть числом")
         return
 
-    if value <= 0:
-        await message.answer("❌ Значение должно быть больше 0")
+    if value == 0:
+        await message.answer("❌ Значение не может быть 0")
+        return
+
+    if value < 0 and not is_owner(user_id):
+        await message.answer("❌ Только владелец может забирать значения (отрицательное число)")
         return
 
     async with AsyncSessionLocal() as session:
@@ -378,22 +414,22 @@ async def admin_grant_input(message: Message):
 
         if grant_type == "balance":
             target_user.balance += int(value)
-            result_text = f"Баланс +{int(value)}"
+            result_text = f"Баланс {int(value):+d}"
         elif grant_type == "tap":
             target_user.tap_power += int(value)
-            result_text = f"Tap power +{int(value)}"
+            result_text = f"Tap power {int(value):+d}"
         elif grant_type == "regen":
             target_user.energy_regen += value
-            result_text = f"Реген +{value}"
+            result_text = f"Реген {value:+}"
         elif grant_type == "autofarm":
             target_user.auto_farm_level += int(value)
             if target_user.auto_farm_level > 0:
                 target_user.auto_farm_enabled = True
-            result_text = f"Авто-фарм +{int(value)}"
+            result_text = f"Авто-фарм {int(value):+d}"
         elif grant_type == "energy":
             target_user.max_energy += int(value)
             target_user.energy = min(target_user.max_energy, target_user.energy + int(value))
-            result_text = f"Энергия +{int(value)}"
+            result_text = f"Энергия {int(value):+d}"
         else:
             await message.answer("❌ Неизвестный тип выдачи")
             return
@@ -401,7 +437,74 @@ async def admin_grant_input(message: Message):
         await session.commit()
 
     pending_grant.pop(user_id, None)
-    await message.answer(f"✅ Выдано: {result_text}", reply_markup=admin_keyboard)
+    log_admin_action(user_id, f"grant {grant_type} {value} to {target_user.user_id}")
+    await message.answer(f"✅ Готово: {result_text}", reply_markup=admin_keyboard)
+
+
+@dp.message(Command("adminactions7623"))
+async def owner_admin_actions(message: Message):
+    if not is_owner(message.from_user.id):
+        return
+
+    if not admin_action_log:
+        await message.answer("Лог действий администрации пока пуст")
+        return
+
+    text_log = "\n".join(admin_action_log[-30:])
+    await message.answer(f"🧾 Последние действия администрации:\n\n{text_log}")
+
+
+@dp.message(Command("adminslist7623"))
+async def owner_admin_list(message: Message):
+    if not is_owner(message.from_user.id):
+        return
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).where(User.admin_rights.is_(True)))
+        admins = result.scalars().all()
+
+    lines = ["👑 Владелец: 8375181976"]
+    if admins:
+        for user in admins:
+            lines.append(f"• {user.user_id}")
+    else:
+        lines.append("• Дополнительных админов нет")
+
+    await message.answer("📋 Список администрации:\n" + "\n".join(lines))
+
+
+@dp.message(Command("takeadmin7623"))
+async def owner_take_admin(message: Message):
+    if not is_owner(message.from_user.id):
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("Формат: /takeadmin7623 <id или @username>")
+        return
+
+    target = parts[1].strip()
+
+    async with AsyncSessionLocal() as session:
+        target_user = await get_user_by_target(target, session)
+        if not target_user:
+            await message.answer("❌ Пользователь не найден в базе")
+            return
+
+        if target_user.user_id == OWNER_ID:
+            await message.answer("❌ Нельзя забрать права у владельца")
+            return
+
+        target_user.admin_rights = False
+        await session.commit()
+
+    admin_sessions.discard(target_user.user_id)
+    pending_password.discard(target_user.user_id)
+    pending_grant.pop(target_user.user_id, None)
+    pending_broadcast.discard(target_user.user_id)
+
+    log_admin_action(message.from_user.id, f"revoked admin rights from {target_user.user_id}")
+    await message.answer(f"✅ Админка забрана у {target_user.user_id}")
 
 
 @dp.message(F.text == "💰 Топ по балансу")

@@ -43,6 +43,9 @@ class User(Base):
     auto_farm_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     admin_rights: Mapped[bool] = mapped_column(Boolean, default=False)
     invited_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.user_id"), nullable=True)
+    referral_code: Mapped[str | None] = mapped_column(nullable=True, unique=True)
+    referrals_count: Mapped[int] = mapped_column(Integer, default=0)
+    referral_earned: Mapped[int] = mapped_column(Integer, default=0)
 
     last_energy_update: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow
@@ -50,3 +53,4 @@ class User(Base):
     last_farm_update: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow
     )
+    

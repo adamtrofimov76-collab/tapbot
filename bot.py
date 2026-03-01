@@ -298,10 +298,26 @@ async def referral_system(message: Message):
         await session.commit()
 
     bot_username = os.getenv("BOT_USERNAME", "").strip().lstrip("@")
-    referral_link = (
-        f"https://t.me/{bot_username}?start={user.referral_code}"
-        if bot_username
-        else f"/start {user.referral_code}"
+    
+    # Всегда создаем универсальную ссылку в формате t.me
+    if bot_username:
+        referral_link = f"https://t.me/{bot_username}?start={user.referral_code}"
+    else:
+        # Если BOT_USERNAME не установлен, пробуем получить его через bot
+        try:
+            bot_info = await bot.get_me()
+            bot_username = bot_info.username
+            referral_link = f"https://t.me/{bot_username}?start={user.referral_code}"
+        except Exception:
+            # Фолбек: используем ID пользователя как реферальный код
+            referral_link = f"https://t.me/{os.getenv('BOT_TOKEN', '').split(':')[0] if ':' in os.getenv('BOT_TOKEN', '') else 'bot'}?start={user.referral_code}"
+
+    # Создаем клавиатуру с кнопкой копирования
+    referral_keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📋 Скопировать ссылку", callback_data=f"copy_ref_{user.referral_code}")],
+            [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="back_to_main")]
+        ]
     )
 
     await message.answer(
@@ -309,11 +325,12 @@ async def referral_system(message: Message):
         "Приглашай друзей по своей личной ссылке и получай награду за каждого активированного реферала.\n"
         f"• Ты получаешь: <b>+{REFERRAL_REWARD}</b>\n"
         f"• Друг получает: <b>+{REFERRED_USER_REWARD}</b>\n\n"
-        f"🔗 Твоя реферальная ссылка:\n<code>{referral_link}</code>\n\n"
+        f"🔗 Твоя реферальная ссылка (работает везде - Telegram, WhatsApp, SMS, браузер):\n<code>{referral_link}</code>\n\n"
         f"👥 Приглашено: <b>{user.referrals_count}</b>\n"
         f"💸 Заработано по рефералке: <b>{user.referral_earned}</b>\n\n"
-        "ℹ️ Ссылка создаётся только один раз и остаётся за тобой навсегда.",
-        reply_markup=get_main_keyboard(message.from_user.id),
+        "ℹ️ Ссылка создаётся только один раз и остаётся за тобой навсегда.\n"
+        "📋 Просто отправь эту ссылку другу в любом приложении!",
+        reply_markup=referral_keyboard,
     )
 
 
@@ -511,6 +528,36 @@ async def admin_broadcast_start(callback: CallbackQuery):
     pending_broadcast.add(callback.from_user.id)
     await callback.message.answer("✉️ Отправьте текст рассылки одним сообщением")
     log_admin_action(callback.from_user.id, "started broadcast")
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("copy_ref_"))
+async def copy_referral_link(callback: CallbackQuery):
+    referral_code = callback.data.replace("copy_ref_", "")
+    
+    bot_username = os.getenv("BOT_USERNAME", "").strip().lstrip("@")
+    
+    if bot_username:
+        referral_link = f"https://t.me/{bot_username}?start={referral_code}"
+    else:
+        try:
+            bot_info = await bot.get_me()
+            bot_username = bot_info.username
+            referral_link = f"https://t.me/{bot_username}?start={referral_code}"
+        except Exception:
+            referral_link = f"https://t.me/{os.getenv('BOT_TOKEN', '').split(':')[0] if ':' in os.getenv('BOT_TOKEN', '') else 'bot'}?start={referral_code}"
+    
+    await callback.message.answer(
+        f"📋 Ваша реферальная ссылка:\n\n<code>{referral_link}</code>\n\n"
+        "Отправьте эту ссылку другу в любом приложении (Telegram, WhatsApp, SMS и т.д.)",
+        parse_mode="HTML"
+    )
+    await callback.answer("Ссылка скопирована!")
+
+
+@dp.callback_query(F.data == "back_to_main")
+async def back_to_main_from_ref(callback: CallbackQuery):
+    await callback.message.answer("⬅️ Главное меню", reply_markup=get_main_keyboard(callback.from_user.id))
     await callback.answer()
 
 

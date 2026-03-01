@@ -49,4 +49,3 @@ class User(Base):
     last_farm_update: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow
     )
-    

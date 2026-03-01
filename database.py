@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Integer, Float, DateTime, Boolean
+from sqlalchemy import BigInteger, Integer, Float, DateTime, Boolean, ForeignKey
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.orm import declarative_base, Mapped, mapped_column
 
@@ -42,6 +42,7 @@ class User(Base):
     auto_farm_level: Mapped[int] = mapped_column(Integer, default=0)
     auto_farm_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     admin_rights: Mapped[bool] = mapped_column(Boolean, default=False)
+    invited_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.user_id"), nullable=True)
 
     last_energy_update: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow

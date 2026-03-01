@@ -18,6 +18,7 @@ from database import AsyncSessionLocal, User
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BLOCKED_TOP_USER_ID = 8375181976
 OWNER_ID = 8375181976
+REFERRAL_REWARD = 150000
 
 bot = Bot(
     token=BOT_TOKEN,
@@ -31,12 +32,10 @@ admin_sessions: set[int] = set()
 pending_password: set[int] = set()
 pending_grant: dict[int, dict[str, str | None]] = {}
 pending_broadcast: set[int] = set()
-pending_owner_grant_admin: set[int] = set()
-pending_owner_take_admin: set[int] = set()
 admin_action_log: list[str] = []
 
 
-base_main_keyboard = ReplyKeyboardMarkup(
+main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="👇 Тап")],
         [KeyboardButton(text="🛠 Улучшения")],
@@ -81,32 +80,6 @@ admin_keyboard = InlineKeyboardMarkup(
     ]
 )
 
-owner_keyboard = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [InlineKeyboardButton(text="🛡 Открыть админку", callback_data="owner_open_admin")],
-        [InlineKeyboardButton(text="➕ Выдать админку", callback_data="owner_grant_admin")],
-        [InlineKeyboardButton(text="➖ Забрать админку", callback_data="owner_take_admin")],
-        [InlineKeyboardButton(text="📋 Список администрации", callback_data="owner_list_admins")],
-        [InlineKeyboardButton(text="🧾 Действия администрации", callback_data="owner_actions")],
-    ]
-)
-
-
-def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
-    if is_owner(user_id):
-        return ReplyKeyboardMarkup(
-            keyboard=[
-                [KeyboardButton(text="👇 Тап")],
-                [KeyboardButton(text="🛠 Улучшения")],
-                [KeyboardButton(text="🏆 Рейтинг")],
-                [KeyboardButton(text="📊 Профиль")],
-                [KeyboardButton(text="👑 Панель владельца")],
-            ],
-            resize_keyboard=True,
-        )
-
-    return base_main_keyboard
-
 
 def is_admin(user_id: int) -> bool:
     return user_id == OWNER_ID or user_id in admin_sessions
@@ -121,31 +94,6 @@ def log_admin_action(actor_id: int, action: str):
     admin_action_log.append(f"[{timestamp}] {actor_id}: {action}")
     if len(admin_action_log) > 200:
         del admin_action_log[:-200]
-
-
-async def send_admin_list_message(message: Message):
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(select(User).where(User.admin_rights.is_(True)))
-        admins = result.scalars().all()
-
-    lines = [f"👑 Владелец: {OWNER_ID}"]
-    filtered_admins = [user for user in admins if user.user_id != OWNER_ID]
-    if filtered_admins:
-        for user in filtered_admins:
-            lines.append(f"• {user.user_id}")
-    else:
-        lines.append("• Дополнительных админов нет")
-
-    await message.answer("📋 Список администрации:\n" + "\n".join(lines))
-
-
-async def send_admin_actions_message(message: Message):
-    if not admin_action_log:
-        await message.answer("Лог действий администрации пока пуст")
-        return
-
-    text_log = "\n".join(admin_action_log[-30:])
-    await message.answer(f"🧾 Последние действия администрации:\n\n{text_log}")
 
 
 # -------- ЭНЕРГИЯ --------
@@ -180,10 +128,32 @@ async def start_handler(message: Message):
         )
         user = result.scalar_one_or_none()
 
-        if not user:
+        is_new_user = user is None
+        if is_new_user:
             user = User(user_id=message.from_user.id)
             session.add(user)
-            await session.commit()
+
+        referral_bonus_text = ""
+        if is_new_user:
+            parts = (message.text or "").split(maxsplit=1)
+            referral_payload = parts[1].strip() if len(parts) > 1 else ""
+
+            if referral_payload.isdigit():
+                inviter_id = int(referral_payload)
+                if inviter_id != message.from_user.id:
+                    inviter_result = await session.execute(
+                        select(User).where(User.user_id == inviter_id)
+                    )
+                    inviter = inviter_result.scalar_one_or_none()
+                    if inviter:
+                        user.invited_by = inviter_id
+                        inviter.balance += REFERRAL_REWARD
+                        referral_bonus_text = (
+                            f"\n🎁 Реферальный бонус активирован! "
+                            f"Пригласивший получил +{REFERRAL_REWARD} к балансу."
+                        )
+
+        await session.commit()
 
         username = message.from_user.first_name or message.from_user.username or "фермер"
 
@@ -196,8 +166,9 @@ async def start_handler(message: Message):
             f"🤝 Приятной игры!\n"
             f"С уважением, твой Фермер.\n\n"
             f"💰 Баланс: {user.balance}\n"
-            f"⚡ Энергия: {int(user.energy)}",
-            reply_markup=get_main_keyboard(message.from_user.id)
+            f"⚡ Энергия: {int(user.energy)}"
+            f"{referral_bonus_text}",
+            reply_markup=main_keyboard
         )
 
 
@@ -238,15 +209,7 @@ async def rating_menu(message: Message):
 
 @dp.message(F.text == "⬅️ Назад")
 async def back_to_main_menu(message: Message):
-    await message.answer("⬅️ Главное меню", reply_markup=get_main_keyboard(message.from_user.id))
-
-
-@dp.message(F.text == "👑 Панель владельца")
-async def owner_panel(message: Message):
-    if not is_owner(message.from_user.id):
-        return
-
-    await message.answer("👑 Панель владельца", reply_markup=owner_keyboard)
+    await message.answer("⬅️ Главное меню", reply_markup=main_keyboard)
 
 
 async def resolve_player_name(user_id: int) -> str:
@@ -304,74 +267,8 @@ async def panel_login(message: Message):
         log_admin_action(user_id, "owner opened admin panel")
         return
 
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(select(User).where(User.user_id == user_id))
-        user = result.scalar_one_or_none()
-
-    if user and user.admin_rights:
-        admin_sessions.add(user_id)
-        await message.answer("✅ Вход в админку выполнен", reply_markup=admin_keyboard)
-        log_admin_action(user_id, "admin opened panel by rights")
-        return
-
     pending_password.add(user_id)
     await message.answer("🔐 Введите пароль от админ-панели:")
-
-
-@dp.callback_query(F.data == "owner_open_admin")
-async def owner_open_admin(callback: CallbackQuery):
-    if not is_owner(callback.from_user.id):
-        await callback.answer("Нет доступа", show_alert=True)
-        return
-
-    admin_sessions.add(callback.from_user.id)
-    await callback.message.answer("🛡 Админка открыта", reply_markup=admin_keyboard)
-    log_admin_action(callback.from_user.id, "owner opened admin panel from owner panel")
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "owner_grant_admin")
-async def owner_grant_admin_start(callback: CallbackQuery):
-    if not is_owner(callback.from_user.id):
-        await callback.answer("Нет доступа", show_alert=True)
-        return
-
-    pending_owner_grant_admin.add(callback.from_user.id)
-    pending_owner_take_admin.discard(callback.from_user.id)
-    await callback.message.answer("Введите ID пользователя, которому нужно выдать админку")
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "owner_take_admin")
-async def owner_take_admin_start(callback: CallbackQuery):
-    if not is_owner(callback.from_user.id):
-        await callback.answer("Нет доступа", show_alert=True)
-        return
-
-    pending_owner_take_admin.add(callback.from_user.id)
-    pending_owner_grant_admin.discard(callback.from_user.id)
-    await callback.message.answer("Введите ID пользователя, у которого нужно забрать админку")
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "owner_list_admins")
-async def owner_list_admins_callback(callback: CallbackQuery):
-    if not is_owner(callback.from_user.id):
-        await callback.answer("Нет доступа", show_alert=True)
-        return
-
-    await send_admin_list_message(callback.message)
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "owner_actions")
-async def owner_actions_callback(callback: CallbackQuery):
-    if not is_owner(callback.from_user.id):
-        await callback.answer("Нет доступа", show_alert=True)
-        return
-
-    await send_admin_actions_message(callback.message)
-    await callback.answer()
 
 
 @dp.callback_query(F.data == "admin_close")
@@ -436,69 +333,6 @@ async def admin_broadcast_start(callback: CallbackQuery):
     await callback.message.answer("✉️ Отправьте текст рассылки одним сообщением")
     log_admin_action(callback.from_user.id, "started broadcast")
     await callback.answer()
-
-
-@dp.message(lambda message: message.from_user.id in pending_owner_grant_admin and bool(message.text))
-async def owner_grant_admin_input(message: Message):
-    if not is_owner(message.from_user.id):
-        pending_owner_grant_admin.discard(message.from_user.id)
-        return
-
-    raw_id = message.text.strip()
-    if not raw_id.isdigit():
-        await message.answer("❌ Нужен только числовой ID пользователя")
-        return
-
-    target_id = int(raw_id)
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(select(User).where(User.user_id == target_id))
-        target_user = result.scalar_one_or_none()
-        if target_user is None:
-            target_user = User(user_id=target_id)
-            session.add(target_user)
-
-        target_user.admin_rights = True
-        await session.commit()
-
-    admin_sessions.add(target_id)
-    pending_owner_grant_admin.discard(message.from_user.id)
-    log_admin_action(message.from_user.id, f"owner granted admin rights to {target_id}")
-    await message.answer(f"✅ Админка выдана пользователю {target_id}", reply_markup=owner_keyboard)
-
-
-@dp.message(lambda message: message.from_user.id in pending_owner_take_admin and bool(message.text))
-async def owner_take_admin_input(message: Message):
-    if not is_owner(message.from_user.id):
-        pending_owner_take_admin.discard(message.from_user.id)
-        return
-
-    raw_id = message.text.strip()
-    if not raw_id.isdigit():
-        await message.answer("❌ Нужен только числовой ID пользователя")
-        return
-
-    target_id = int(raw_id)
-    if target_id == OWNER_ID:
-        await message.answer("❌ Нельзя забрать права у владельца")
-        return
-
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(select(User).where(User.user_id == target_id))
-        target_user = result.scalar_one_or_none()
-        if target_user is None:
-            await message.answer("❌ Пользователь не найден в базе")
-            return
-
-        target_user.admin_rights = False
-        await session.commit()
-
-    admin_sessions.discard(target_id)
-    pending_password.discard(target_id)
-    pending_grant.pop(target_id, None)
-    pending_broadcast.discard(target_id)
-    pending_owner_take_admin.discard(message.from_user.id)
-    log_admin_action(message.from_user.id, f"owner revoked admin rights from {target_id}")
-    await message.answer(f"✅ Админка забрана у пользователя {target_id}", reply_markup=owner_keyboard)
 
 
 @dp.message(lambda message: message.from_user.id in pending_password and bool(message.text))
@@ -636,7 +470,12 @@ async def owner_admin_actions(message: Message):
     if not is_owner(message.from_user.id):
         return
 
-    await send_admin_actions_message(message)
+    if not admin_action_log:
+        await message.answer("Лог действий администрации пока пуст")
+        return
+
+    text_log = "\n".join(admin_action_log[-30:])
+    await message.answer(f"🧾 Последние действия администрации:\n\n{text_log}")
 
 
 @dp.message(Command("adminslist7623"))
@@ -644,7 +483,18 @@ async def owner_admin_list(message: Message):
     if not is_owner(message.from_user.id):
         return
 
-    await send_admin_list_message(message)
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).where(User.admin_rights.is_(True)))
+        admins = result.scalars().all()
+
+    lines = ["👑 Владелец: 8375181976"]
+    if admins:
+        for user in admins:
+            lines.append(f"• {user.user_id}")
+    else:
+        lines.append("• Дополнительных админов нет")
+
+    await message.answer("📋 Список администрации:\n" + "\n".join(lines))
 
 
 @dp.message(Command("takeadmin7623"))
@@ -883,6 +733,9 @@ async def main():
         await conn.run_sync(Base.metadata.create_all)
         await conn.execute(
             text("ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_rights BOOLEAN DEFAULT FALSE")
+        )
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS invited_by BIGINT")
         )
 
     await dp.start_polling(bot)
